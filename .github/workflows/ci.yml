@@ -1,0 +1,51 @@
+name: M0 validation
+on: [push, pull_request, workflow_dispatch]
+permissions:
+  contents: read
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-features --locked
+      - run: cargo build --release --features ffi,desktop --examples --locked
+      - run: cargo build --release --features ffi --locked
+      - name: C host (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/c_host.c -Ltarget/release -lgrazer -Wl,-rpath,"$PWD/target/release" -o target/c_host
+          target/c_host
+      - name: C host (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          gcc -std=c11 -Wall -Wextra -Werror -Iinclude examples/c_host.c target/release/grazer.dll -o target/c_host.exe
+          export PATH="$PWD/target/release:$PATH"
+          target/c_host.exe
+      - run: cargo package --locked
+  wasm:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo build --release -p grazer-wasm-check --target wasm32-unknown-unknown --locked
+      - run: cargo run --release --example trace --locked -- 100000 > target/native-trace.txt
+      - run: node scripts/check-wasm.mjs
+      - run: cargo build --release --target wasm32-unknown-unknown --features web --locked -p grazer

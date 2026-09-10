@@ -1,7 +1,7 @@
 # M0 validation
 
-Date: 2026-09-10. Status: M0 implementation and validation complete. Publication
-is blocked by the crates.io account's unverified email address.
+Date: 2026-09-10. Status: M0 implementation, validation and publication complete.
+Published [grazer 0.1.0-alpha.1](https://crates.io/crates/grazer/0.1.0-alpha.1).
 
 M0 validates deterministic linear motion and presentation. It does not establish
 the eventual 100,000 desktop / 30,000 Web bullet performance target with collision
@@ -81,22 +81,23 @@ The final desktop run rendered 1,320 frames including warmup and exited 0.
 Both browser backends were rechecked against the final build; WebGPU readback,
 audio unlock, pause, and all 100,000 browser/native trace hashes passed.
 
-## Publication attempt
+## Publication
 
 `cargo publish --dry-run --locked` passed. The generated package contains 22
 files, 130.4 KiB uncompressed / 37.3 KiB compressed. Both its default build and
 all-feature/all-target compilation were verified from the packaged sources.
 
-The authorized `cargo publish --locked --registry crates-io` reached upload but
-crates.io returned HTTP 400: **A verified email address is required to publish
-crates to crates.io.** No version was published. The account owner must set and
-verify their email in [crates.io profile settings](https://crates.io/settings/profile).
+After the account owner verified their email, the authorized
+`cargo publish --locked --registry crates-io` succeeded and Cargo confirmed
+registry availability. Published source commit:
+`5f7aa34dc9a5a2a5f1b1b80c34c1de68ed1bbce6` (the validated runtime plus its report).
 
-After verification, retry the same version and verify an independent consumer
-using `grazer = { version = "=0.1.0-alpha.1", features = ["ffi"] }`. A prepared
-consumer at `/tmp/grazer-consumer` checks the Rust API, C ABI version and the
-100,000-tick golden trace. This post-publication check has not run because the
-package is not yet available. No release tag has been created.
+An independent consumer at `/tmp/grazer-consumer` downloaded the registry
+package with `grazer = { version = "=0.1.0-alpha.1", features = ["ffi"] }`.
+Its release build passed Rust API checks, C ABI version checks and the
+100,000-tick golden trace. The consumer lockfile confirms the crates.io registry
+source and package checksum:
+`f1d943e20de606aee49934f223655cb3aa42ed5170010ceebac4eb5b45623978`.
 
 ## Reproduction
 

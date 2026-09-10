@@ -26,13 +26,20 @@ mod native {
         last: Instant,
         accumulator: Duration,
         keys: [bool; 4],
-        paused: bool,
+        focused: bool,
+        drawable: bool,
         frames: usize,
         limit: usize,
         samples: Vec<f64>,
         error: Option<String>,
     }
     impl ApplicationHandler for App {
+        fn exiting(&mut self, _: &ActiveEventLoop) {
+            // Surfaces and windows must be released while the display connection
+            // owned by the event loop is still alive (notably on Wayland/EGL).
+            self.renderer.take();
+            self.window.take();
+        }
         fn resumed(&mut self, event_loop: &ActiveEventLoop) {
             if self.window.is_some() {
                 return;
@@ -80,7 +87,7 @@ mod native {
             match event {
                 WindowEvent::CloseRequested => event_loop.exit(),
                 WindowEvent::Resized(size) => {
-                    self.paused = size.width == 0 || size.height == 0;
+                    self.drawable = size.width != 0 && size.height != 0;
                     if let Some(r) = &mut self.renderer {
                         r.resize(size.width, size.height);
                     }
@@ -88,7 +95,7 @@ mod native {
                     self.accumulator = Duration::ZERO;
                 }
                 WindowEvent::Focused(focused) => {
-                    self.paused = !focused;
+                    self.focused = focused;
                     self.keys = [false; 4];
                     self.last = Instant::now();
                     self.accumulator = Duration::ZERO;
@@ -114,7 +121,7 @@ mod native {
                     let now = Instant::now();
                     let elapsed = now.duration_since(self.last);
                     self.last = now;
-                    if self.paused {
+                    if !self.focused || !self.drawable {
                         return;
                     }
                     let start = Instant::now();
@@ -149,7 +156,7 @@ mod native {
                             }
                         }
                     }
-                    if self.frames > 120 {
+                    if self.frames > 120 && self.samples.len() < 1200 {
                         self.samples.push(start.elapsed().as_secs_f64() * 1000.0);
                     }
                     if self.limit > 0 && self.frames >= self.limit {
@@ -160,7 +167,7 @@ mod native {
             }
         }
         fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-            if self.paused {
+            if !self.focused || !self.drawable {
                 event_loop.set_control_flow(ControlFlow::Wait);
             } else {
                 event_loop.set_control_flow(ControlFlow::Poll);
@@ -185,7 +192,8 @@ mod native {
             last: Instant::now(),
             accumulator: Duration::ZERO,
             keys: [false; 4],
-            paused: false,
+            focused: true,
+            drawable: true,
             frames: 0,
             limit,
             samples: Vec::new(),

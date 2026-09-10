@@ -21,10 +21,15 @@ impl WebDemo {
         };
         let runtime =
             crate::demo::scene(count, 42).map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+        let descriptor = wgpu::InstanceDescriptor {
             backends,
             ..Default::default()
-        });
+        };
+        let instance = if backend == "auto" {
+            wgpu::util::new_instance_with_webgpu_detection(&descriptor).await
+        } else {
+            wgpu::Instance::new(&descriptor)
+        };
         let width = canvas.width();
         let height = canvas.height();
         let surface = instance

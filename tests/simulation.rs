@@ -78,3 +78,37 @@ fn rng_golden_and_config_validation() {
         .is_err()
     );
 }
+
+#[test]
+fn batch_validation_is_atomic_and_ids_are_stable() {
+    let mut r = Runtime::new(
+        Config {
+            capacity: 4,
+            ..Config::default()
+        },
+        0,
+    )
+    .unwrap();
+    let before = r.state_hash();
+    let mut invalid = bullet();
+    invalid.radius = Fixed::ZERO;
+    assert_eq!(
+        r.spawn_batch(&[bullet(), invalid]),
+        Err(Error::InvalidBullet)
+    );
+    assert_eq!(r.state_hash(), before);
+    assert_eq!(r.spawn_batch(&[bullet(), bullet()]), Ok(1));
+    assert_eq!(r.spawn(bullet()), Ok(3));
+    assert_eq!(
+        r.sprites().map(|s| s.id).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3]
+    );
+}
+
+#[test]
+fn protocol_one_golden_trace() {
+    assert_eq!(
+        grazer::demo::trace(100_000).last(),
+        Some(&0xb07e2bf531c8d412)
+    );
+}

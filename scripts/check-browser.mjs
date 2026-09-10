@@ -4,7 +4,9 @@ import { createHash } from 'node:crypto';
 import assert from 'node:assert/strict';
 const backend = process.argv[2] ?? 'webgpu';
 const count = Number(process.argv[3] ?? 30000);
-const page = await fetch('http://127.0.0.1:9223/json/new?about:blank', { method: 'PUT' }).then(r => r.json());
+const frameTarget = Number(process.argv[5] ?? 180);
+const port = Number(process.argv[4] ?? 9223);
+const page = await fetch(`http://127.0.0.1:${port}/json/new?about:blank`, { method: 'PUT' }).then(r => r.json());
 const ws = new WebSocket(page.webSocketDebuggerUrl);
 await new Promise((resolve, reject) => { ws.onopen = resolve; ws.onerror = reject; });
 let next = 0;
@@ -34,8 +36,8 @@ try {
     for (let attempt = 0; ; attempt++) {
         const state = await evaluate('window.grazerValidation');
         if (state?.error) throw new Error(state.error);
-        if (state?.ready && state.frames >= 180) break;
-        if (attempt >= 600) throw new Error('timed out waiting for 180 rendered frames');
+        if (state?.ready && state.frames >= frameTarget) break;
+        if (attempt >= 600) throw new Error('timed out waiting for rendered frames');
         if (attempt % 30 === 0) console.log(`${backend}: frames=${state?.frames ?? 0}`);
         await sleep(500);
     }
@@ -48,6 +50,32 @@ try {
     assert.equal(metrics.error, null);
     assert.ok(metrics.adapter.includes(backend === 'webgl' ? '/ Gl' : '/ BrowserWebGpu'), metrics.adapter);
     await evaluate('window.grazerSetPaused(true)');
+    if (backend === 'webgpu') {
+        metrics.pixelProbe = await evaluate(`(async () => {
+            const canvas = document.querySelector('#game');
+            const context = canvas.getContext('webgpu');
+            const config = context.getConfiguration();
+            const device = config.device;
+            device.pushErrorScope('validation');
+            context.configure({...config,usage:config.usage | GPUTextureUsage.COPY_SRC});
+            window.grazerDrawForProbe();
+            const buffer = device.createBuffer({size: 512, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ});
+            const encoder = device.createCommandEncoder();
+            const texture = context.getCurrentTexture();
+            encoder.copyTextureToBuffer({texture, origin:[canvas.width/2,canvas.height/2,0]}, {buffer,offset:0,bytesPerRow:256}, [1,1,1]);
+            encoder.copyTextureToBuffer({texture, origin:[0,0,0]}, {buffer,offset:256,bytesPerRow:256}, [1,1,1]);
+            device.queue.submit([encoder.finish()]);
+            const error = await device.popErrorScope();
+            if (error) throw new Error(error.message);
+            await buffer.mapAsync(GPUMapMode.READ);
+            const bytes = new Uint8Array(buffer.getMappedRange());
+            const result = {center:Array.from(bytes.slice(0,4)),background:Array.from(bytes.slice(256,260))};
+            buffer.unmap(); buffer.destroy(); return result;
+        })()`);
+        assert.deepEqual(metrics.pixelProbe.center, [255,255,255,255], 'player must be rendered at canvas center');
+        assert.ok(metrics.pixelProbe.background.slice(0,3).every(n=>n<100), 'background must be dark');
+        assert.equal(metrics.pixelProbe.background[3], 255);
+    }
     const tick = (await evaluate('window.grazerMetrics()')).ticks;
     await sleep(100);
     assert.equal((await evaluate('window.grazerMetrics()')).ticks, tick, 'pause must stop ticks');

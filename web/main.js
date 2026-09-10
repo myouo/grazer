@@ -35,6 +35,7 @@ try {
     window.grazerTrace = (ticks = 100000) => Array.from(conformance_trace(ticks), n => n.toString(16).padStart(16,'0'));
     window.grazerMetrics = () => ({ ...window.grazerValidation, ticks: runtime.tick().toString(), cpuSubmitP95Ms: p95(samples), rafIntervalP95Ms: p95(intervals), simulationStepP95Ms: p95(simTimes), samples: samples.length, hash: runtime.state_hash(), userAgent: navigator.userAgent });
     window.grazerSetPaused = (value) => { paused = value; last = null; };
+    window.grazerDrawForProbe = () => runtime.draw();
     let measuredFrames = 0;
     const frame = (now) => {
         if (document.hidden || paused) { last = null; requestAnimationFrame(frame); return; }

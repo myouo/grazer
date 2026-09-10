@@ -1,6 +1,7 @@
 # M0 validation
 
-Date: 2026-09-10. Status: final validation in progress; publication pending.
+Date: 2026-09-10. Status: M0 implementation and validation complete. Publication
+is blocked by the crates.io account's unverified email address.
 
 M0 validates deterministic linear motion and presentation. It does not establish
 the eventual 100,000 desktop / 30,000 Web bullet performance target with collision
@@ -19,6 +20,11 @@ and grazing. Timing of CPU submit is not GPU execution time.
   Linux, Windows, macOS and WASM. Native jobs execute Rust tests, compile the
   desktop example, compile and execute the C host, and verify Cargo packaging.
   These jobs do not validate desktop GUI presentation on Windows or macOS.
+- [Final source CI](https://github.com/myouo/grazer/actions/runs/34431547273)
+  passed all four jobs for `ad59afa1d456881acfb5921aa4628ab5a1842092`, including
+  the lifecycle fix, auto-backend detection and additional conformance tests.
+  Rust-cache emitted non-fatal missing-directory cleanup annotations; test,
+  compilation, C host and package verification steps all succeeded.
 - The C host checks ABI version/layout, null arguments, capacity failures,
   unchanged state after rejected input, snapshot size queries, no partial
   writes, expected positions, and creation/destruction. Native C fixture hash:
@@ -60,6 +66,7 @@ warmup ticks/frames. CPU motion sample count is 1,200. Browser buffers are
 | Native 100,000 bullets, motion only | 1,200 ticks | 0.4724 ms |
 | Native 30,000 bullets, motion only | 1,200 ticks | 0.1406 ms |
 | Desktop 100,000, CPU update + submit, concurrent validation load | 180 frames | 17.243 ms |
+| Final desktop build, 100,000, CPU update + submit | 1,200 frames | 16.035 ms |
 | Software WebGPU 30,000, CPU update + submit | 64 frames | 754.6 ms |
 | Software WebGPU 30,000, rAF interval | 64 frames | 766.7 ms |
 | Software WebGL2 30,000, CPU update + submit | 61 frames | 6.4 ms |
@@ -69,6 +76,27 @@ Browser runs overlapped other validation work and establish compatibility only.
 Software rendering does not meet the eventual 60Hz presentation target. The
 simulation retains accumulated ticks under overload and limits catch-up work
 per rendered frame. No collision/grazing costs are included at M0.
+
+The final desktop run rendered 1,320 frames including warmup and exited 0.
+Both browser backends were rechecked against the final build; WebGPU readback,
+audio unlock, pause, and all 100,000 browser/native trace hashes passed.
+
+## Publication attempt
+
+`cargo publish --dry-run --locked` passed. The generated package contains 22
+files, 130.4 KiB uncompressed / 37.3 KiB compressed. Both its default build and
+all-feature/all-target compilation were verified from the packaged sources.
+
+The authorized `cargo publish --locked --registry crates-io` reached upload but
+crates.io returned HTTP 400: **A verified email address is required to publish
+crates to crates.io.** No version was published. The account owner must set and
+verify their email in [crates.io profile settings](https://crates.io/settings/profile).
+
+After verification, retry the same version and verify an independent consumer
+using `grazer = { version = "=0.1.0-alpha.1", features = ["ffi"] }`. A prepared
+consumer at `/tmp/grazer-consumer` checks the Rust API, C ABI version and the
+100,000-tick golden trace. This post-publication check has not run because the
+package is not yet available. No release tag has been created.
 
 ## Reproduction
 

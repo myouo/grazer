@@ -1,0 +1,75 @@
+// First Sortie, moved from the M2 native stage. All motion is Q16.16.
+fn shot(p: vec, v: vec) {
+    emit(p, v, 3.0, 1, 420);
+}
+
+task main() {
+    fork waves();
+    wait(7200);
+    cancel_children();
+    clear_enemies();
+    clear_shots();
+    let boss_entity: entity = enemy(vec(width() / 2.0, height() / 8.0),
+        vec(0.0, 0.0), 24.0, 1000, 0, 0xe99fffff);
+    wave(20);
+    boss(boss_entity, 1000);
+    fork boss_fan(boss_entity);
+    fork boss_aim(boss_entity);
+    while alive(boss_entity) { wait(1); }
+    cancel_children();
+    complete();
+}
+
+task waves() {
+    let wave_number: int = 1;
+    while wave_number <= 20 {
+        wave(wave_number);
+        let column: int = 1;
+        while column <= 5 {
+            let ship: entity = enemy(vec(width() * fixed(column) / 6.0, height() / 32.0),
+                vec(0.0, 1.25), 12.0, 12, 440, 0xff9292ff);
+            fork wave_shots(ship);
+            column = column + 2;
+        }
+        wave_number = wave_number + 1;
+        wait(360);
+    }
+}
+
+task wave_shots(ship: entity) {
+    attach(ship);
+    while alive(ship) {
+        let p: vec = position(ship);
+        shot(p, vec(-1.0, 2.5));
+        shot(p, vec(0.0, 2.5));
+        shot(p, vec(1.0, 2.5));
+        wait(60);
+    }
+}
+
+task boss_fan(ship: entity) {
+    attach(ship);
+    while alive(ship) {
+        let column: int = -2;
+        while column <= 2 {
+            shot(position(ship), vec(fixed(column), 1.5));
+            column = column + 1;
+        }
+        wait(45);
+    }
+}
+
+task boss_aim(ship: entity) {
+    attach(ship);
+    wait(10);
+    while alive(ship) {
+        let p: vec = position(ship);
+        let direction: vec = aim(p, player(), 3.0);
+        let column: int = -1;
+        while column <= 1 {
+            shot(p, direction + vec(fixed(column) * 0.25, 0.0));
+            column = column + 1;
+        }
+        wait(70);
+    }
+}

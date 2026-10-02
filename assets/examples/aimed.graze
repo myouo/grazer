@@ -1,0 +1,6 @@
+task main() {
+    while true {
+        aimed(vec(width() / 2.0, 100.0), player(), 5, 2.5, 0.10, 3.0, 420);
+        wait(90);
+    }
+}

@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Grazer M0</title>
+<style>
+body{margin:0;background:#090d18;color:#dae5f1;font:16px system-ui}main{max-width:1100px;margin:20px auto;padding:0 16px}h1{margin-bottom:8px}canvas{display:block;width:100%;aspect-ratio:16/9;background:#040610}button{padding:9px 15px;margin:8px 8px 8px 0}#status{white-space:pre-wrap}a{color:#7cdef0}
+</style>
+<main>
+<h1>Grazer M0</h1>
+<p>Deterministic motion demo. Arrow keys move the white marker. Collisions are a later milestone.</p>
+<nav><a href="?backend=webgpu&count=30000">WebGPU</a> · <a href="?backend=webgl&count=30000">WebGL2</a></nav>
+<button id="audio">Enable audio</button><button id="pause">Pause</button>
+<canvas id="game" width="1920" height="1080" tabindex="0" aria-label="Bullet motion demo"></canvas>
+<p id="status" role="status">Loading runtime…</p>
+</main>
+<script type="module" src="./motion.js"></script>
+</html>

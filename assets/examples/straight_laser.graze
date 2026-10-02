@@ -1,0 +1,6 @@
+task main() {
+    while true {
+        laser(vec(80.0, 60.0), vec(240.0, 540.0), 6.0, 60, 120, 30);
+        wait(300);
+    }
+}

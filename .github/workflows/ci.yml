@@ -1,4 +1,4 @@
-name: M0 validation
+name: Runtime validation
 on: [push, pull_request, workflow_dispatch]
 permissions:
   contents: read
@@ -47,5 +47,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: cargo build --release -p grazer-wasm-check --target wasm32-unknown-unknown --locked
       - run: cargo run --release --example trace --locked -- 100000 > target/native-trace.txt
+      - run: cargo run --release --example trace --locked -- 100000 m1 > target/native-simulation-trace.txt
       - run: node scripts/check-wasm.mjs
+      - run: node scripts/benchmark-wasm.mjs 128 10
       - run: cargo build --release --target wasm32-unknown-unknown --features web --locked -p grazer

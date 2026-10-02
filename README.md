@@ -2,14 +2,17 @@
 
 Deterministic Rust 2D bullet-hell (STG) runtime.
 
-**M2 / experimental, repository sources:** a playable Rust stage SDK with
+**M3 / experimental, repository sources:** a typed stage/bullet language with
+verified bytecode, concurrent cooperative tasks, deterministic budgets, source
+diagnostics and VM save/restore. The playable stage and Boss now run from
+`assets/demo/first_sortie.graze` through the same Rust stage SDK with
 desktop/WebGPU/WebGL2 runners, textured sprites and HUD, versioned atlas/tone
 resources, audio events, shooting/focus/Bomb, enemy waves, Boss and death/restart.
 The shared headless core retains fixed 60Hz, checked Q16.16, generational pools,
-swept collision, grazing and input/command replay. The dedicated language/VM,
-advanced STG tools, stable SDK/ABI and editor are later milestones.
+swept collision, grazing and input/command replay. Advanced STG tools, saved
+gameplay replay/debug tools, stable SDK/ABI and editor are later milestones.
 Public APIs may change before 0.1.0. The published `0.1.0-alpha.1` crate contains
-M0; these M1/M2 additions have not been published.
+M0; these M1/M2/M3 additions have not been published.
 
 ```rust
 use grazer::{Game, GameInput};
@@ -33,6 +36,9 @@ See [M2 SDK and controls](docs/m2-playable.md) and [M1 contracts](docs/m1-headle
 ```sh
 cargo test --workspace
 cargo run --release --example play --features desktop
+# Optional --script my_stage.graze or --script target/my_stage.gzb.
+cargo run --release --example script -- compile assets/demo/first_sortie.graze target/first_sortie.gzb
+cargo run --release --example script
 # Optional: --project assets/demo/project.json; --autoplay --frames 600
 cargo run --release --example benchmark -- 100000 1200 m1 circle
 cargo run --release --example benchmark -- 100000 1200 m1 capsule
@@ -83,13 +89,15 @@ cargo build --release -p grazer-wasm-check --target wasm32-unknown-unknown
 cargo run --release --example trace -- 100000 > target/native-trace.txt
 cargo run --release --example trace -- 100000 m1 > target/native-simulation-trace.txt
 cargo run --release --example trace -- 100000 m2 > target/native-game-trace.txt
+cargo run --release --example trace -- 100000 m3 > target/native-script-trace.txt
+cargo run --release --example script -- restore-check > target/native-vm-restore.txt
 node scripts/check-wasm.mjs
 node scripts/benchmark-wasm.mjs 30000 1200 circle
 ```
 
 ## Contracts
 
-- All three protocols use integer authoritative state, SplitMix64 and explicit update
+- All simulation/stage protocols use integer authoritative state, SplitMix64 and explicit update
   order. Hashes include configuration, RNG, pending input and ordered entities;
   protocol 2 also hashes generations, free-list order and gameplay state.
   Hashes diagnose divergence and are not cryptographic.
@@ -110,7 +118,8 @@ node scripts/benchmark-wasm.mjs 30000 1200 circle
 See [M0 platform validation](docs/m0-validation.md) and
 [M1 core validation](docs/m1-validation.md) for actual coverage and performance
 evidence, and [M2 playable validation](docs/m2-validation.md) for the shared SDK.
-Next milestones add the dedicated language/VM, advanced
+See [M3 language and VM](docs/m3-language.md) and [M3 validation](docs/m3-validation.md)
+for script authoring and actual execution evidence. Next milestones add advanced
 STG features, replay/debug tools, stable SDK/ABI and editor integration, in that order.
 
 Licensed under MIT OR Apache-2.0.

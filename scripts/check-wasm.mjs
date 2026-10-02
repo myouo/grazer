@@ -5,6 +5,7 @@ for (const [mode, path, run] of [
     ['M0', 'target/native-trace.txt', instance.exports.run_trace],
     ['M1', 'target/native-simulation-trace.txt', instance.exports.run_simulation_trace],
     ['M2', 'target/native-game-trace.txt', instance.exports.run_game_trace],
+    ['M3', 'target/native-script-trace.txt', instance.exports.run_script_trace],
 ]) {
     const hashes = readFileSync(path, 'utf8').trim().split('\n');
     assert.equal(hashes.length, 100000, `${mode} requires the full conformance trace`);
@@ -19,3 +20,6 @@ for (const [mode, path, run] of [
     console.log(`PASS: ${mode} ${hashes.length} native/WASM per-tick hashes; final ${hashes.at(-1)}`);
 }
 console.log('PASS: M1 10,000-tick encoded replay executed in WASM');
+const restored=BigInt.asUintN(64,instance.exports.run_vm_restore_check(10000)).toString(16).padStart(16,'0');
+assert.equal(restored,readFileSync('target/native-vm-restore.txt','utf8').trim(),'serialized VM/RNG native/WASM continuation');
+console.log(`PASS: M3 VM serialized/RNG restore continuation, 10000 ticks; ${restored}`);

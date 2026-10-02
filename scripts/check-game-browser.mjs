@@ -43,7 +43,7 @@ try {
         assert.ok(pixels.player.slice(0,3).some(n=>n>100),'textured player pixels');assert.ok(pixels.boss.slice(0,3).some(n=>n>100),'textured boss pixels');assert.equal(pixels.player[3],255);
     }
     const won=await evaluate('window.grazerGameAdvance(4000,0,0,1)');assert.equal(won.phase,2);assert.equal(won.bossHealth,0);assert.ok(Number(won.ticks)>=9000&&Number(won.ticks)<=10800);await screenshot('clear');
-    const expected=createHash('sha256').update(readFileSync('target/native-game-trace.txt')).digest('hex');
+    const expected=createHash('sha256').update(readFileSync('target/native-script-trace.txt')).digest('hex');
     const actual=await evaluate(`(async()=>{const text=window.grazerGameTrace(100000).join('\\n')+'\\n',hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));return Array.from(new Uint8Array(hash),v=>v.toString(16).padStart(2,'0')).join('');})()`);
     assert.equal(actual,expected,'100,000 native/browser Game hashes');
     const metrics={backend,unlocked,boss,won,pixels,traceSha256:actual,userAgent:await evaluate('navigator.userAgent')};
@@ -51,5 +51,11 @@ try {
     await call('Page.navigate',{url:`http://127.0.0.1:8080/?backend=${backend}&project=./missing.json`});
     for(let i=0;i<80;i++){if(await evaluate('Boolean(window.grazerGameValidation?.error)'))break;await sleep(100);}
     assert.ok(await evaluate('window.grazerGameValidation.error'),'missing resources fail visibly');
-    console.log(`PASS M2 ${backend}: sprites/HUD, audio unlock, input/bomb, pause, death/restart, full stage clear, resource failure, 100000 browser/native hashes`);
+    for(const fixture of ['bad_type','loop']) {
+        await call('Page.navigate',{url:`http://127.0.0.1:8080/?backend=${backend}&script=./${fixture}.graze`});
+        for(let i=0;i<180;i++){if(await evaluate('Boolean(window.grazerGameValidation?.error)'))break;await sleep(100);}
+        const error=await evaluate('window.grazerGameValidation.error');assert.ok(error?.includes('stage.graze:1:'),error);
+        if(fixture==='loop'){const stopped=await evaluate('window.grazerGameMetrics()');assert.equal(stopped.phase,3);assert.equal(stopped.ticks,'0');assert.ok(stopped.diagnostic.includes('budget'));}
+    }
+    console.log(`PASS M3 ${backend}: scripted stage, sprites/HUD/audio, bomb, pause, death/restart, full stage clear, compile/runtime diagnostics, 100000 browser/native hashes`);
 } finally {await call('Page.close').catch(()=>{});ws.close();}

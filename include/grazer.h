@@ -102,6 +102,22 @@ int32_t grazer_game_resource_info(const GrazerGame *game, GrazerResourceInfo *ou
 int32_t grazer_game_atlas(const GrazerGame *game, uint8_t *out, uint32_t capacity, uint32_t *required);
 int32_t grazer_game_sprite_assets(const GrazerGame *game, GrazerSpriteAsset *out, uint32_t capacity, uint32_t *required);
 int32_t grazer_game_sound_assets(const GrazerGame *game, GrazerSoundAsset *out, uint32_t capacity, uint32_t *required);
+
+/* Script API version 1 is additive to game ABI v2. Same handle/output structs.
+ * Format 0 = UTF-8 source, null+zero selects shipped stage; 1 = checked bytecode.
+ * Compiler/runtime faults retain source byte offsets and one-based line/column.
+ * After a runtime script error Game is FAULTED and world ticks remain stopped.
+ * Native game creation still uses the historical M2 Rust stage.
+ */
+#define GRAZER_SCRIPT_API_VERSION 1u
+#define GRAZER_SCRIPT_ERROR 6
+typedef struct {
+    uint32_t kind, line, column, start, end, task_slot, task_generation, reserved;
+} GrazerScriptDiagnostic;
+uint32_t grazer_script_api_version(void);
+int32_t grazer_game_create_script(const GrazerGameConfig *config, const uint8_t *source, uint32_t length, uint32_t format, GrazerGame **out, GrazerScriptDiagnostic *diagnostic);
+int32_t grazer_game_diagnostic(const GrazerGame *game, GrazerScriptDiagnostic *out);
+int32_t grazer_game_diagnostic_text(const GrazerGame *game, uint8_t *out, uint32_t capacity, uint32_t *required);
 #ifdef __cplusplus
 }
 #endif

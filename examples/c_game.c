@@ -2,9 +2,11 @@
 #include <assert.h>
 #include <inttypes.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 int main(int argc, char **argv) {
+    int scripted = argc > 2 && (strcmp(argv[2],"script") == 0 || strcmp(argv[2],"bytecode") == 0);
     assert(grazer_game_abi_version() == GRAZER_GAME_ABI_VERSION);
     GrazerGameConfig config = {GRAZER_GAME_ABI_VERSION, sizeof(config), 42, 512, 10000};
     GrazerGame *game = NULL;
@@ -12,7 +14,30 @@ int main(int argc, char **argv) {
     config.abi_version = 99;
     assert(grazer_game_create(&config, &game) == GRAZER_VERSION_MISMATCH && game == NULL);
     config.abi_version = GRAZER_GAME_ABI_VERSION;
-    assert(grazer_game_create(&config, &game) == GRAZER_OK && game != NULL);
+    if (scripted) {
+        assert(grazer_script_api_version() == GRAZER_SCRIPT_API_VERSION);
+        GrazerScriptDiagnostic diagnostic;
+        const char bad[] = "task main() { let n: int = true; }";
+        assert(grazer_game_create_script(&config,(const uint8_t*)bad,sizeof(bad)-1,0,&game,&diagnostic) == GRAZER_SCRIPT_ERROR && game == NULL);
+        assert(diagnostic.kind == 2 && diagnostic.line == 1 && diagnostic.column > 0);
+        const char loop[] = "task main() { while true {} }";
+        assert(grazer_game_create_script(&config,(const uint8_t*)loop,sizeof(loop)-1,0,&game,&diagnostic) == GRAZER_OK);
+        assert(grazer_game_step(game,(GrazerGameInput){0,0,0}) == GRAZER_RUNTIME_ERROR);
+        assert(grazer_game_diagnostic(game,&diagnostic) == GRAZER_OK && diagnostic.kind == 9 && diagnostic.line == 1);
+        GrazerHud stopped;
+        assert(grazer_game_hud(game,&stopped) == GRAZER_OK && stopped.phase == GRAZER_FAULTED && stopped.tick == 0);
+        uint8_t message[1024]; uint32_t length;
+        assert(grazer_game_diagnostic_text(game,message,sizeof(message),&length) == GRAZER_OK);
+        assert(strstr((const char*)message,"c-stage.graze:1:") != NULL);
+        grazer_game_destroy(game);game=NULL;
+        if (argc > 3 && strcmp(argv[2],"bytecode") == 0) {
+            FILE *file = fopen(argv[3],"rb"); assert(file != NULL);
+            assert(fseek(file,0,SEEK_END) == 0); long size=ftell(file);assert(size > 0 && size <= 16*1024*1024);
+            assert(fseek(file,0,SEEK_SET) == 0);uint8_t *bytes=malloc((size_t)size);assert(bytes != NULL);
+            assert(fread(bytes,1,(size_t)size,file) == (size_t)size);fclose(file);
+            assert(grazer_game_create_script(&config,bytes,(uint32_t)size,1,&game,&diagnostic) == GRAZER_OK && diagnostic.kind == 0);free(bytes);
+        } else assert(grazer_game_create_script(&config,NULL,0,0,&game,&diagnostic) == GRAZER_OK && diagnostic.kind == 0);
+    } else assert(grazer_game_create(&config, &game) == GRAZER_OK && game != NULL);
     uint64_t initial, hash;
     assert(grazer_game_state_hash(game, &initial) == GRAZER_OK);
     assert(grazer_game_step(game, (GrazerGameInput){2,0,0}) == GRAZER_INVALID_ARGUMENT);
@@ -70,6 +95,6 @@ int main(int argc, char **argv) {
     assert(grazer_game_restart(game) == GRAZER_OK);
     assert(grazer_game_state_hash(game,&hash) == GRAZER_OK && hash == initial);
     grazer_game_destroy(game); grazer_game_destroy(NULL);
-    printf("PASS M2 C host: 100000 hashes, %u clears, %u audio events, resource=%016" PRIx64 "\n",clears,audio_count,info.content_hash);
+    printf("PASS %s C host: 100000 hashes, %u clears, %u audio events, resource=%016" PRIx64 "\n",scripted ? "M3 script":"M2 native",clears,audio_count,info.content_hash);
     return 0;
 }

@@ -1,4 +1,4 @@
-import init, { WebGame, game_conformance_trace } from './pkg/grazer.js';
+import init, { WebGame, game_conformance_trace, script_conformance_trace } from './pkg/grazer.js';
 const canvas = document.querySelector('#game'), status = document.querySelector('#status');
 const query = new URLSearchParams(location.search), keys = new Set();
 let runtime, audio, sounds, last = null, paused = false, focused = true, bombPending = false;
@@ -9,7 +9,7 @@ document.querySelector('#backend').value = backend;
 document.querySelector('#backend').onchange = event => { query.set('backend',event.target.value); location.search = query.toString(); };
 function metrics() {
     const h = runtime?.hud();
-    return {...state,paused,ticks:runtime?.tick().toString(),score:runtime?.score().toString(),health:h?.[0],bombs:h?.[1],phase:h?.[2],wave:h?.[3],bossHealth:h?.[4],bossMax:h?.[5],projectiles:h?.[6],enemies:h?.[7],bombFlash:h?.[8],hash:runtime?.state_hash(),resources:runtime?.resource_hash()};
+    return {...state,paused,ticks:runtime?.tick().toString(),score:runtime?.score().toString(),health:h?.[0],bombs:h?.[1],phase:h?.[2],wave:h?.[3],bossHealth:h?.[4],bossMax:h?.[5],projectiles:h?.[6],enemies:h?.[7],bombFlash:h?.[8],hash:runtime?.state_hash(),resources:runtime?.resource_hash(),program:runtime?.program_hash(),diagnostic:runtime?.diagnostic()};
 }
 function playSound(id) {
     if (!audio || audio.state !== 'running' || voices.size >= 16) return;
@@ -50,7 +50,7 @@ for (const button of document.querySelectorAll('[data-key]')) {
     button.onlostpointercapture = () => keys.delete(button.dataset.key);
 }
 document.querySelector('#touch-bomb').onclick = () => bombPending=true;
-function fail(error) {state.error=String(error);status.textContent=`Stage failed: ${error}`;}
+function fail(error) {state.error=String(error);status.textContent=`Stage paused: ${error}`;try{runtime?.draw();}catch{}}
 function updateStatus() {
     const m=metrics(); status.textContent = m.phase===1 ? 'Ship lost. Press R or Restart for a new run.' : m.phase===2 ? 'Stage clear. Press R to fly again.' : `Wave ${m.wave || 1} · ${m.health} lives · ${m.bombs} bombs`;
 }
@@ -63,13 +63,17 @@ try {
     if(atlasURL.origin!==location.origin) throw new Error('Atlas must use this origin');
     const atlasResponse = await fetch(atlasURL); if(!atlasResponse.ok) throw new Error(`Atlas load failed (${atlasResponse.status})`);
     const health = Number(query.get('health') ?? 0); if(!Number.isInteger(health)||health<0||health>10000) throw new Error('health must be 0..10,000');
-    runtime = await WebGame.create(canvas,backend,manifest,new Uint8Array(await atlasResponse.arrayBuffer()),health);
+    const scriptURL=new URL(query.get('script')??'./first_sortie.graze',project);
+    if(scriptURL.origin!==location.origin)throw new Error('Script must use this origin');
+    const scriptResponse=await fetch(scriptURL);if(!scriptResponse.ok)throw new Error(`Script load failed (${scriptResponse.status})`);
+    runtime = await WebGame.create_with_source(canvas,backend,manifest,new Uint8Array(await atlasResponse.arrayBuffer()),health,await scriptResponse.text());
     sounds = new Map(parsed.sounds.map(sound => [sound.id,sound]));
     Object.assign(state,{ready:true,adapter:runtime.adapter(),initialHash:runtime.state_hash(),width:canvas.width,height:canvas.height});
     document.querySelector('#diagnostics').textContent = state.adapter;
     for (const id of ['audio','pause','restart']) document.querySelector(`#${id}`).disabled=false;
     window.grazerGameMetrics=metrics;
-    window.grazerGameTrace=(frames=100000)=>Array.from(game_conformance_trace(frames),n=>n.toString(16).padStart(16,'0'));
+    window.grazerGameTrace=(frames=100000)=>Array.from(script_conformance_trace(frames),n=>n.toString(16).padStart(16,'0'));
+    window.grazerNativeGameTrace=(frames=100000)=>Array.from(game_conformance_trace(frames),n=>n.toString(16).padStart(16,'0'));
     window.grazerSetPaused=setPaused; window.grazerDrawForProbe=()=>runtime.draw();
     window.grazerGameAdvance=(steps,x=0,y=0,flags=1)=>{
         if(!Number.isInteger(steps)||steps<0||steps>20000) throw new Error('steps must be 0..20,000');

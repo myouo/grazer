@@ -1,5 +1,19 @@
 # Changelog
 
+## Unreleased — M3
+
+- Add typed `.graze` source: int/bool/Q16.16/vector/entity/task values, variables,
+  functions, conditionals/loops, short-circuit expressions and cooperative tasks.
+- Add versioned verified register bytecode, deterministic fork/wait/join/cancel/
+  entity-owned task lifetimes, checked arithmetic and instruction/command/task/
+  call-depth budgets with source-localized faults.
+- Add binary VM snapshots containing frames/locals, task generations/order,
+  waits/joins/ownership, RNG, limits/status/fault and program compatibility checks.
+- Migrate First Sortie/Boss to script; desktop/Web default to that source with
+  visible compilation/runtime diagnostics. Retain the M2 native stage reference.
+- Add source/bytecode constructors and diagnostics to the existing C game handle,
+  plus complete native/C/WASM/browser and serialized-continuation conformance.
+
 ## Unreleased — M2
 
 - Add generic `Game<Stage>`, the Rust-native First Sortie stage (20 waves + Boss),

@@ -10,7 +10,8 @@ fn main() {
         "m0" => grazer::demo::trace(ticks),
         "m1" => grazer::simulation::demo::trace(ticks),
         "m2" => grazer::game::trace(ticks),
-        _ => panic!("trace mode must be m0, m1 or m2"),
+        "m3" => grazer::language::trace(ticks),
+        _ => panic!("trace mode must be m0, m1, m2 or m3"),
     };
     for hash in hashes {
         writeln!(out, "{hash:016x}").unwrap();

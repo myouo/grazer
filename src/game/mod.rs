@@ -63,6 +63,7 @@ pub enum GamePhase {
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GameError {
+    Script(crate::language::Diagnostic),
     Input,
     Resources(ResourceError),
     Simulation(SimulationError),
@@ -81,6 +82,7 @@ impl From<SimulationError> for GameError {
 impl std::fmt::Display for GameError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            Self::Script(diagnostic) => write!(f, "{diagnostic}"),
             Self::Input => f.write_str("game axes must be -1, 0 or 1"),
             Self::Resources(error) => write!(f, "{error}"),
             Self::Simulation(error) => write!(f, "{error}"),
@@ -246,6 +248,12 @@ impl<S: Stage> Game<S> {
     pub fn simulation(&self) -> &Simulation {
         &self.world
     }
+    pub fn stage(&self) -> &S {
+        &self.stage
+    }
+    pub fn diagnostic(&self) -> Option<&crate::language::Diagnostic> {
+        self.stage.diagnostic()
+    }
     pub fn resources(&self) -> &ResourcePack {
         &self.resources
     }
@@ -325,7 +333,15 @@ impl<S: Stage> Game<S> {
     }
     fn active_step(&mut self, input: GameInput, bomb_edge: bool) -> Result<(), GameError> {
         let old_status = self.status;
-        self.status = self.stage.update(&mut self.world)?;
+        self.status = match self.stage.update(&mut self.world) {
+            Ok(status) => status,
+            Err(error) => {
+                return Err(self.stage.diagnostic().map_or_else(
+                    || GameError::Simulation(error),
+                    |diagnostic| GameError::Script(diagnostic.clone()),
+                ));
+            }
+        };
         if old_status.boss.is_none() && self.status.boss.is_some() {
             self.emit(6);
         }
@@ -376,6 +392,7 @@ impl<S: Stage> Game<S> {
             },
             speed,
         )?;
+        self.stage.after_step(&self.world);
         let mut hit = false;
         let mut graze = false;
         let mut died = false;

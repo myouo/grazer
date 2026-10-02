@@ -3,7 +3,8 @@
 //! [`Game`] is the M2 playable SDK: native Rust stages, six controls, resources,
 //! sprite/HUD snapshots and audio events. [`Simulation`] implements the M1
 //! headless collision core. [`Runtime`] retains the protocol-1 M0 fixture.
-//! A dedicated scripting language and VM are later milestones.
+//! [`language`] provides the M3 typed compiler, verified bytecode, cooperative
+//! tasks, resource budgets, source diagnostics and serialized VM continuation.
 //! Rendering is optional; the default build has no dependencies.
 //!
 //! ```
@@ -17,6 +18,7 @@
 pub mod demo;
 mod fixed;
 pub mod game;
+pub mod language;
 pub use game::{
     AudioEvent, Game, GameConfig, GameError, GameInput, GamePhase, GameSprite, Hud, Stage,
     StageStatus,

@@ -30,7 +30,55 @@ pub struct GrazerResourceInfo {
     pub content_hash: u64,
 }
 pub struct GrazerGame {
-    inner: Game,
+    inner: HostedGame,
+}
+enum HostedGame {
+    Native(Box<Game>),
+    Script(Box<Game<crate::language::ScriptStage>>),
+}
+impl HostedGame {
+    fn step(&mut self, input: GameInput) -> Result<(), crate::GameError> {
+        match self {
+            Self::Native(game) => game.step(input),
+            Self::Script(game) => game.step(input),
+        }
+    }
+    fn restart(&mut self) -> Result<(), crate::GameError> {
+        match self {
+            Self::Native(game) => game.restart(),
+            Self::Script(game) => game.restart(),
+        }
+    }
+    fn state_hash(&self) -> u64 {
+        match self {
+            Self::Native(game) => game.state_hash(),
+            Self::Script(game) => game.state_hash(),
+        }
+    }
+    fn hud(&self) -> Hud {
+        match self {
+            Self::Native(game) => game.hud(),
+            Self::Script(game) => game.hud(),
+        }
+    }
+    fn audio_events(&self) -> &[AudioEvent] {
+        match self {
+            Self::Native(game) => game.audio_events(),
+            Self::Script(game) => game.audio_events(),
+        }
+    }
+    fn resources(&self) -> &ResourcePack {
+        match self {
+            Self::Native(game) => game.resources(),
+            Self::Script(game) => game.resources(),
+        }
+    }
+    fn diagnostic(&self) -> Option<&crate::language::Diagnostic> {
+        match self {
+            Self::Native(_) => None,
+            Self::Script(game) => game.diagnostic(),
+        }
+    }
 }
 #[unsafe(no_mangle)]
 pub extern "C" fn grazer_game_abi_version() -> u32 {
@@ -76,7 +124,9 @@ pub unsafe extern "C" fn grazer_game_create(
             Ok(inner) => {
                 // SAFETY: out is valid writable storage and owns the resulting Box.
                 unsafe {
-                    *out = Box::into_raw(Box::new(GrazerGame { inner }));
+                    *out = Box::into_raw(Box::new(GrazerGame {
+                        inner: HostedGame::Native(Box::new(inner)),
+                    }));
                 }
                 OK
             }
@@ -174,14 +224,27 @@ pub unsafe extern "C" fn grazer_game_snapshot(
             return INVALID_ARGUMENT;
         };
         // SAFETY: helper uses the same caller-provided buffer contract.
-        unsafe {
-            copy(
-                game.inner.sprites(),
-                game.inner.sprites().count(),
-                out,
-                capacity,
-                required,
-            )
+        match &game.inner {
+            // SAFETY: both variants use the same caller-provided snapshot contract.
+            HostedGame::Native(game) => unsafe {
+                copy(
+                    game.sprites(),
+                    game.sprites().count(),
+                    out,
+                    capacity,
+                    required,
+                )
+            },
+            // SAFETY: both variants use the same caller-provided snapshot contract.
+            HostedGame::Script(game) => unsafe {
+                copy(
+                    game.sprites(),
+                    game.sprites().count(),
+                    out,
+                    capacity,
+                    required,
+                )
+            },
         }
     })
 }
@@ -346,4 +409,189 @@ unsafe fn copy<T: Copy>(
         }
     }
     OK
+}
+
+pub const SCRIPT_API_VERSION: u32 = 1;
+pub const SCRIPT_ERROR: i32 = 6;
+#[repr(C)]
+#[derive(Default)]
+pub struct GrazerScriptDiagnostic {
+    pub kind: u32,
+    pub line: u32,
+    pub column: u32,
+    pub start: u32,
+    pub end: u32,
+    pub task_slot: u32,
+    pub task_generation: u32,
+    pub reserved: u32,
+}
+fn diagnostic_info(d: &crate::language::Diagnostic) -> GrazerScriptDiagnostic {
+    GrazerScriptDiagnostic {
+        kind: d.kind as u32,
+        line: d.line,
+        column: d.column,
+        start: d.span.start,
+        end: d.span.end,
+        task_slot: d.task.map_or(u32::MAX, |t| t.slot),
+        task_generation: d.task.map_or(0, |t| t.generation),
+        reserved: 0,
+    }
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn grazer_script_api_version() -> u32 {
+    SCRIPT_API_VERSION
+}
+/// # Safety
+/// Config/output/diagnostic/source buffers are valid aligned and nonoverlapping.
+/// Source has length readable bytes; null/zero with format 0 selects built-in.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn grazer_game_create_script(
+    config: *const GrazerGameConfig,
+    source: *const u8,
+    length: u32,
+    format: u32,
+    out: *mut *mut GrazerGame,
+    diagnostic: *mut GrazerScriptDiagnostic,
+) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return INVALID_ARGUMENT;
+        }
+        // SAFETY: caller provides valid writable output pointer storage.
+        unsafe {
+            *out = std::ptr::null_mut();
+        }
+        if !diagnostic.is_null() {
+            // SAFETY: optional diagnostic is valid writable storage by contract.
+            unsafe {
+                diagnostic.write(GrazerScriptDiagnostic::default());
+            }
+        }
+        // SAFETY: config must be live/readable or null by contract.
+        let Some(config) = (unsafe { config.as_ref() }) else {
+            return INVALID_ARGUMENT;
+        };
+        if config.abi_version != GAME_ABI_VERSION
+            || config.struct_size as usize != std::mem::size_of::<GrazerGameConfig>()
+        {
+            return VERSION_MISMATCH;
+        }
+        if format > 1 || length > 16 * 1024 * 1024 || source.is_null() && length > 0 {
+            return INVALID_ARGUMENT;
+        }
+        let bytes = if length == 0 {
+            &[][..]
+        } else {
+            // SAFETY: caller guarantees length readable source bytes.
+            unsafe { std::slice::from_raw_parts(source, length as usize) }
+        };
+        let stage = if format == 1 {
+            crate::language::Program::from_bytes(bytes).and_then(|program| {
+                crate::language::ScriptStage::new(
+                    std::sync::Arc::new(program),
+                    crate::language::VmLimits::default(),
+                    config.seed,
+                )
+            })
+        } else if bytes.is_empty() {
+            crate::language::ScriptStage::builtin(config.seed)
+        } else {
+            match std::str::from_utf8(bytes) {
+                Ok(source) => crate::language::ScriptStage::compile(
+                    "c-stage.graze",
+                    source,
+                    crate::language::VmLimits::default(),
+                    config.seed,
+                ),
+                Err(_) => return INVALID_ARGUMENT,
+            }
+        };
+        let stage = match stage {
+            Ok(stage) => stage,
+            Err(error) => {
+                if !diagnostic.is_null() {
+                    // SAFETY: optional diagnostic is valid nonoverlapping writable storage.
+                    unsafe {
+                        diagnostic.write(diagnostic_info(&error));
+                    }
+                }
+                return SCRIPT_ERROR;
+            }
+        };
+        let mut cfg = GameConfig::default();
+        if config.projectile_capacity > 0 {
+            cfg.simulation.projectile_capacity = config.projectile_capacity;
+        }
+        if config.player_health > 0 {
+            cfg.simulation.player.health = config.player_health;
+        }
+        match Game::with_stage(cfg, config.seed, ResourcePack::builtin(), stage) {
+            Ok(game) => {
+                // SAFETY: out is writable pointer storage; caller owns the Box handle.
+                unsafe {
+                    *out = Box::into_raw(Box::new(GrazerGame {
+                        inner: HostedGame::Script(Box::new(game)),
+                    }));
+                }
+                OK
+            }
+            Err(_) => INVALID_ARGUMENT,
+        }
+    })
+}
+/// # Safety
+/// Handle live/readable; out is nonoverlapping writable diagnostic storage.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn grazer_game_diagnostic(
+    game: *const GrazerGame,
+    out: *mut GrazerScriptDiagnostic,
+) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return INVALID_ARGUMENT;
+        }
+        // SAFETY: caller guarantees readable live handle or null.
+        let Some(game) = (unsafe { game.as_ref() }) else {
+            return INVALID_ARGUMENT;
+        };
+        // SAFETY: out is valid writable diagnostic storage by contract.
+        unsafe {
+            out.write(
+                game.inner
+                    .diagnostic()
+                    .map_or_else(GrazerScriptDiagnostic::default, diagnostic_info),
+            );
+        }
+        OK
+    })
+}
+/// # Safety
+/// Same output-buffer rules as snapshot. Length includes terminating NUL.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn grazer_game_diagnostic_text(
+    game: *const GrazerGame,
+    out: *mut u8,
+    capacity: u32,
+    required: *mut u32,
+) -> i32 {
+    guard(|| {
+        // SAFETY: caller guarantees readable live handle or null.
+        let Some(game) = (unsafe { game.as_ref() }) else {
+            return INVALID_ARGUMENT;
+        };
+        let text = game
+            .inner
+            .diagnostic()
+            .map_or_else(String::new, ToString::to_string);
+        // SAFETY: helper uses the same valid/nonaliasing byte buffer contract.
+        unsafe {
+            copy(
+                text.bytes().chain(std::iter::once(0)),
+                text.len() + 1,
+                out,
+                capacity,
+                required,
+            )
+        }
+    })
 }

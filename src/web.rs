@@ -80,7 +80,7 @@ pub fn conformance_trace(ticks: u32) -> Result<Vec<u64>, JsValue> {
 
 #[wasm_bindgen]
 pub struct WebGame {
-    game: crate::game::Game,
+    game: crate::game::Game<crate::language::ScriptStage>,
     renderer: crate::graphics::GameRenderer,
     clock: crate::game::FrameClock,
 }
@@ -92,6 +92,24 @@ impl WebGame {
         manifest: String,
         atlas: Vec<u8>,
         health: u32,
+    ) -> Result<WebGame, JsValue> {
+        Self::create_with_source(
+            canvas,
+            backend,
+            manifest,
+            atlas,
+            health,
+            include_str!("../assets/demo/first_sortie.graze").into(),
+        )
+        .await
+    }
+    pub async fn create_with_source(
+        canvas: web_sys::HtmlCanvasElement,
+        backend: String,
+        manifest: String,
+        atlas: Vec<u8>,
+        health: u32,
+        source: String,
     ) -> Result<WebGame, JsValue> {
         console_error_panic_hook::set_once();
         let backends = match backend.as_str() {
@@ -106,9 +124,15 @@ impl WebGame {
         if health > 0 {
             config.simulation.player.health = health;
         }
-        let game =
-            crate::game::Game::with_stage(config, 42, pack, crate::game::DemoStage::default())
-                .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let stage = crate::language::ScriptStage::compile(
+            "stage.graze",
+            &source,
+            crate::language::VmLimits::default(),
+            42,
+        )
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let game = crate::game::Game::with_stage(config, 42, pack, stage)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
         let descriptor = wgpu::InstanceDescriptor {
             backends,
             ..Default::default()
@@ -154,6 +178,14 @@ impl WebGame {
     }
     pub fn resource_hash(&self) -> String {
         format!("{:016x}", self.game.resources().content_hash())
+    }
+    pub fn diagnostic(&self) -> String {
+        self.game
+            .diagnostic()
+            .map_or_else(String::new, ToString::to_string)
+    }
+    pub fn program_hash(&self) -> String {
+        format!("{:016x}", self.game.stage().vm().program().content_hash())
     }
     pub fn hud(&self) -> Vec<u32> {
         let h = self.game.hud();
@@ -216,4 +248,11 @@ pub fn game_conformance_trace(frames: u32) -> Result<Vec<u64>, JsValue> {
         return Err(JsValue::from_str("maximum 100,000 frames"));
     }
     Ok(crate::game::trace(frames))
+}
+#[wasm_bindgen]
+pub fn script_conformance_trace(frames: u32) -> Result<Vec<u64>, JsValue> {
+    if frames > 100000 {
+        return Err(JsValue::from_str("maximum 100,000 frames"));
+    }
+    Ok(crate::language::trace(frames))
 }

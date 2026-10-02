@@ -73,6 +73,22 @@ pub struct EntityHandle {
     generation: u32,
 }
 impl EntityHandle {
+    pub(crate) fn from_parts(kind: u32, slot: u32, generation: u32) -> Option<Self> {
+        let kind = match kind {
+            0 if slot == 0 && generation == 1 => EntityKind::Player,
+            1 => EntityKind::Enemy,
+            2 => EntityKind::Projectile,
+            _ => return None,
+        };
+        if generation == 0 || slot >= MAX_ENTITY_CAPACITY {
+            return None;
+        }
+        Some(Self {
+            kind,
+            slot,
+            generation,
+        })
+    }
     pub const PLAYER: Self = Self {
         kind: EntityKind::Player,
         slot: 0,
@@ -408,6 +424,30 @@ impl Simulation {
     }
     pub fn enemy(&self, handle: EntityHandle) -> Option<&Enemy> {
         Some(&self.enemies.get(handle)?.spec)
+    }
+    pub(crate) fn set_velocity(
+        &mut self,
+        handle: EntityHandle,
+        velocity: Vec2,
+    ) -> Result<(), SimulationError> {
+        match handle.kind {
+            EntityKind::Enemy => {
+                self.enemies
+                    .get_mut(handle)
+                    .ok_or(SimulationError::InvalidHandle)?
+                    .spec
+                    .velocity = velocity
+            }
+            EntityKind::Projectile => {
+                self.projectiles
+                    .get_mut(handle)
+                    .ok_or(SimulationError::InvalidHandle)?
+                    .spec
+                    .velocity = velocity
+            }
+            EntityKind::Player => return Err(SimulationError::InvalidHandle),
+        }
+        Ok(())
     }
     // M2 native game commands run inside a Game tick and are reproduced by its
     // versioned GameInput trace. They do not extend the M1 replay command ABI.

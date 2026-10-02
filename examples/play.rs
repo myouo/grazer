@@ -8,8 +8,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod native {
     use grazer::{
         audio::DesktopAudio,
-        game::{DemoStage, FrameClock, Game, GameConfig, GameInput},
+        game::{FrameClock, Game, GameConfig, GameInput},
         graphics::GameRenderer,
+        language::{Program, ScriptStage, VmLimits},
         resources::ResourcePack,
     };
     use std::{sync::Arc, time::Instant};
@@ -21,7 +22,7 @@ mod native {
         window::{Window, WindowId},
     };
     struct App {
-        game: Game,
+        game: Game<ScriptStage>,
         window: Option<Arc<Window>>,
         renderer: Option<GameRenderer>,
         audio: Option<DesktopAudio>,
@@ -119,7 +120,20 @@ mod native {
                             KeyCode::KeyZ | KeyCode::Space => self.input.fire = pressed,
                             KeyCode::KeyX => self.input.bomb = pressed,
                             KeyCode::ShiftLeft | KeyCode::ShiftRight => self.input.focus = pressed,
-                            KeyCode::KeyR | KeyCode::Enter => self.input.restart = pressed,
+                            KeyCode::KeyR | KeyCode::Enter => {
+                                if pressed && self.error.is_some() {
+                                    if let Err(error) = self.game.restart() {
+                                        self.error = Some(error.to_string());
+                                    } else {
+                                        self.error = None;
+                                        self.paused = false;
+                                        self.clock.reset();
+                                        self.last = Instant::now();
+                                    }
+                                } else {
+                                    self.input.restart = pressed;
+                                }
+                            }
                             KeyCode::KeyP if pressed && !event.repeat => {
                                 self.paused = !self.paused;
                                 self.clock.reset();
@@ -158,8 +172,10 @@ mod native {
                         }
                         if let Err(error) = self.game.step(input) {
                             self.error = Some(error.to_string());
-                            event_loop.exit();
-                            return;
+                            eprintln!("Stage paused: {error}");
+                            self.paused = true;
+                            self.clock.reset();
+                            break;
                         }
                         if let Some(audio) = &mut self.audio {
                             audio.events(self.game.audio_events(), self.game.resources());
@@ -188,7 +204,9 @@ mod native {
                             hud.health,
                             hud.bombs,
                             hud.score,
-                            if self.paused {
+                            if let Some(error) = &self.error {
+                                error.as_str()
+                            } else if self.paused {
                                 "PAUSED"
                             } else {
                                 "Z shoot / X bomb / R restart"
@@ -218,11 +236,15 @@ mod native {
         let mut limit = 0;
         let mut autoplay = false;
         let mut project = None;
+        let mut script_path = None;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--frames" => limit = args.next().ok_or("--frames needs a count")?.parse()?,
                 "--autoplay" => autoplay = true,
                 "--project" => project = Some(args.next().ok_or("--project needs a path")?),
+                "--script" => {
+                    script_path = Some(args.next().ok_or("--script needs a source/bytecode path")?)
+                }
                 _ => return Err(format!("unknown option {arg}").into()),
             }
         }
@@ -234,7 +256,25 @@ mod native {
                 include_bytes!("../assets/demo/sprites.rgba").to_vec(),
             )?
         };
-        let game = Game::with_stage(GameConfig::default(), 42, pack, DemoStage::default())?;
+        let stage = if let Some(path) = script_path {
+            if path.ends_with(".gzb") {
+                ScriptStage::new(
+                    Arc::new(Program::from_bytes(&std::fs::read(&path)?)?),
+                    VmLimits::default(),
+                    42,
+                )?
+            } else {
+                ScriptStage::compile(
+                    &path,
+                    &std::fs::read_to_string(&path)?,
+                    VmLimits::default(),
+                    42,
+                )?
+            }
+        } else {
+            ScriptStage::builtin(42)?
+        };
+        let game = Game::with_stage(GameConfig::default(), 42, pack, stage)?;
         let audio = match DesktopAudio::new() {
             Ok(audio) => {
                 println!("audio=running");

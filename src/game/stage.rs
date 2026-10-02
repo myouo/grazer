@@ -19,6 +19,10 @@ pub trait Stage: Clone {
     const CONTENT_ID: u64;
     fn update(&mut self, world: &mut Simulation) -> Result<StageStatus, SimulationError>;
     fn state_hash(&self) -> u64;
+    fn diagnostic(&self) -> Option<&crate::language::Diagnostic> {
+        None
+    }
+    fn after_step(&mut self, _: &Simulation) {}
 }
 #[derive(Clone, Default)]
 pub struct DemoStage {

@@ -30,6 +30,9 @@ jobs:
       - run: cargo run --release --example replay --locked -- audit
       - run: cargo run --release --features resources --example project --locked -- demo target/prism-passage.grazer
       - run: cargo run --release --example script --locked -- restore-check > target/native-vm-restore.txt
+      # Default-feature trace builds overwrite cdylib artifacts in deps (and the
+      # Windows DLL). Build the FFI variant last, immediately before C hosts.
+      - run: cargo build --release --features ffi --locked
       - name: C host (Unix)
         if: runner.os != 'Windows'
         shell: bash

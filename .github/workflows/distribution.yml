@@ -22,6 +22,7 @@ jobs:
       - run: cargo build --release --features ffi,desktop --examples --locked
       - run: cargo build --release --features ffi --locked
       - run: cargo run --release --features resources --example project -- demo target/prism-passage.grazer
+      - run: cargo build --release --features ffi --locked
       - name: Assemble artifact
         shell: bash
         run: |

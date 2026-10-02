@@ -37,6 +37,7 @@ jobs:
           elif [ "$RUNNER_OS" = "macOS" ]; then
             cp target/release/examples/play target/distribution/grazer
             cp target/release/libgrazer.dylib target/release/libgrazer.a target/distribution/
+            install_name_tool -id @rpath/libgrazer.dylib target/distribution/libgrazer.dylib
           else
             cp target/release/examples/play target/distribution/grazer
             cp target/release/libgrazer.so target/release/libgrazer.a target/distribution/

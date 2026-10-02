@@ -20,6 +20,7 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
       - run: cargo build --release --features ffi,desktop --examples --locked
+      - run: cargo build --release --features ffi --locked
       - run: cargo run --release --features resources --example project -- demo target/prism-passage.grazer
       - name: Assemble artifact
         shell: bash

@@ -2,7 +2,7 @@
 //! This module never changes authoritative simulation state.
 use crate::Runtime;
 mod game;
-pub use game::GameRenderer;
+pub use game::{DebugDraw, GameRenderer, PreparedResources};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},

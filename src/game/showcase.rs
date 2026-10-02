@@ -36,6 +36,36 @@ pub fn conformance_game() -> Game<ScriptStage> {
     )
     .expect("bounded showcase")
 }
+/// Deterministically reach a Boss entry without rendering, then establish a
+/// recorded practice start with the normal health/Bomb loadout and full power.
+pub fn practice(
+    phase: u32,
+    difficulty: Difficulty,
+    health: u32,
+) -> Result<Game<ScriptStage>, GameError> {
+    if !(1..=3).contains(&phase) {
+        return Err(SimulationError::InvalidConfig.into());
+    }
+    let mut game = game(difficulty, health)?;
+    game.world.protect_player(u32::MAX);
+    let target = 25201 + u64::from(phase - 1) * 3600;
+    for _ in 0..target {
+        game.step(GameInput {
+            fire: true,
+            ..GameInput::default()
+        })?;
+    }
+    game.world.prepare_practice();
+    game.score = 0;
+    game.phase_bonus = 0;
+    game.power = 4;
+    game.bombs = game.config.bombs;
+    game.flash = 0;
+    game.shot_cooldown = 0;
+    game.input = GameInput::default();
+    game.audio.clear();
+    Ok(game)
+}
 pub fn input(frame: u64) -> GameInput {
     GameInput {
         fire: true,

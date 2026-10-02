@@ -34,6 +34,98 @@ impl<T: Clone> Clone for Pool<T> {
     }
 }
 impl<T> Pool<T> {
+    pub fn write_checkpoint(
+        &self,
+        out: &mut crate::checkpoint::Writer,
+        mut write: impl FnMut(&T, &mut crate::checkpoint::Writer),
+    ) {
+        out.u32(self.slots.len() as u32);
+        for s in &self.slots {
+            out.u32(s.generation);
+            out.u32(s.dense.map_or(u32::MAX, |i| i as u32));
+        }
+        out.u32(self.free.len() as u32);
+        for &s in &self.free {
+            out.u32(s);
+        }
+        out.u32(self.dense.len() as u32);
+        for e in &self.dense {
+            out.handle(e.handle);
+            write(&e.value, out);
+        }
+    }
+    pub fn read_checkpoint(
+        kind: EntityKind,
+        capacity: u32,
+        input: &mut crate::checkpoint::Reader<'_>,
+        mut read: impl FnMut(
+            &mut crate::checkpoint::Reader<'_>,
+        ) -> Result<T, crate::checkpoint::CheckpointError>,
+    ) -> Result<Self, crate::checkpoint::CheckpointError> {
+        use crate::checkpoint::CheckpointError as E;
+        let count = input.count(capacity as usize, 8)?;
+        if count != capacity as usize {
+            return Err(E::Data("pool capacity"));
+        }
+        let mut slots = Vec::with_capacity(count);
+        for _ in 0..count {
+            let generation = input.u32()?;
+            let dense = input.u32()?;
+            if generation == 0 || dense != u32::MAX && dense >= capacity {
+                return Err(E::Data("slot generation/index"));
+            }
+            slots.push(Slot {
+                generation,
+                dense: if dense == u32::MAX {
+                    None
+                } else {
+                    Some(dense as usize)
+                },
+            });
+        }
+        let n = input.count(count, 4)?;
+        let mut free = Vec::with_capacity(count);
+        let mut seen = vec![false; count];
+        for _ in 0..n {
+            let slot = input.u32()?;
+            let i = slot as usize;
+            if i >= count || seen[i] || slots[i].dense.is_some() {
+                return Err(E::Data("pool free list"));
+            }
+            seen[i] = true;
+            free.push(slot);
+        }
+        let n = input.count(count, 9)?;
+        let mut dense = Vec::with_capacity(count);
+        for index in 0..n {
+            let handle = input.handle()?;
+            let i = handle.slot() as usize;
+            if handle.kind() != kind
+                || i >= count
+                || seen[i]
+                || slots[i].generation != handle.generation()
+                || slots[i].dense != Some(index)
+            {
+                return Err(E::Data("pool dense mapping"));
+            }
+            seen[i] = true;
+            dense.push(Entry {
+                handle,
+                value: read(input)?,
+            });
+        }
+        for (i, s) in slots.iter().enumerate() {
+            if !seen[i] && (s.dense.is_some() || s.generation != u32::MAX) {
+                return Err(E::Data("pool missing/retired slot"));
+            }
+        }
+        Ok(Self {
+            kind,
+            slots,
+            free,
+            dense,
+        })
+    }
     pub fn new(kind: EntityKind, capacity: u32) -> Self {
         Self {
             kind,
@@ -188,5 +280,35 @@ mod tests {
         pool.remove(handle).unwrap();
         assert_eq!(pool.get(handle), None);
         assert_eq!(pool.insert(43), Err(SimulationError::Exhausted));
+    }
+    #[test]
+    fn checkpoint_keeps_retired_slots_free_order_dense_mapping_and_rejects_duplicates() {
+        use crate::checkpoint::{CheckpointError, MAX_CHECKPOINT_BYTES, Reader, Writer};
+        let mut pool = Pool::new(EntityKind::Enemy, 4);
+        pool.slots[0].generation = u32::MAX;
+        let a = pool.insert(1u32).unwrap();
+        let b = pool.insert(2u32).unwrap();
+        let c = pool.insert(3u32).unwrap();
+        pool.remove(a).unwrap();
+        pool.remove(c).unwrap();
+        let mut w = Writer::new(b"GZPOOL01");
+        pool.write_checkpoint(&mut w, |v, w| w.u32(*v));
+        let mut bytes = w.finish(MAX_CHECKPOINT_BYTES).unwrap();
+        let mut r = Reader::new(&bytes, b"GZPOOL01", MAX_CHECKPOINT_BYTES).unwrap();
+        let mut restored =
+            Pool::read_checkpoint(EntityKind::Enemy, 4, &mut r, |r| r.u32()).unwrap();
+        r.finish().unwrap();
+        assert_eq!(restored.get(b), Some(&2));
+        assert_eq!(restored.insert(4).unwrap(), pool.insert(4).unwrap());
+        assert!(restored.get(a).is_none());
+        bytes[12..16].copy_from_slice(&0u32.to_le_bytes());
+        let end = bytes.len() - 8;
+        let hash = crate::checkpoint::fingerprint(&bytes[..end]);
+        bytes[end..].copy_from_slice(&hash.to_le_bytes());
+        let mut r = Reader::new(&bytes, b"GZPOOL01", MAX_CHECKPOINT_BYTES).unwrap();
+        assert!(matches!(
+            Pool::<u32>::read_checkpoint(EntityKind::Enemy, 4, &mut r, |r| r.u32()),
+            Err(CheckpointError::Data(_))
+        ));
     }
 }

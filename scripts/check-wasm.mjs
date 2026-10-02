@@ -24,3 +24,12 @@ console.log('PASS: M1 10,000-tick encoded replay executed in WASM');
 const restored=BigInt.asUintN(64,instance.exports.run_vm_restore_check(10000)).toString(16).padStart(16,'0');
 assert.equal(restored,readFileSync('target/native-vm-restore.txt','utf8').trim(),'serialized VM/RNG native/WASM continuation');
 console.log(`PASS: M3 VM serialized/RNG restore continuation, 10000 ticks; ${restored}`);
+const replayBytes=readFileSync('target/showcase.grz'),buffer=instance.exports.game_replay_buffer(replayBytes.length);assert.ok(buffer);
+new Uint8Array(instance.exports.memory.buffer,buffer,replayBytes.length).set(replayBytes);
+assert.equal(instance.exports.game_replay_load(),1,'M5 native file loads in actual WASM');
+const replayHashes=readFileSync('target/native-advanced-trace.txt','utf8').trim().split('\n');
+for(let frame=0;frame<replayHashes.length;frame++){assert.equal(instance.exports.game_replay_step(),1);assert.equal(BigInt.asUintN(64,instance.exports.game_replay_hash()).toString(16).padStart(16,'0'),replayHashes[frame],`M5 replay frame ${frame+1}`);}
+assert.equal(instance.exports.game_replay_step(),0);
+for(const frame of [1,600,25201,28891,32491,36001,42000,84000,100000]){assert.equal(instance.exports.game_replay_seek(frame),1);assert.equal(BigInt.asUintN(64,instance.exports.game_replay_hash()).toString(16).padStart(16,'0'),replayHashes[frame-1],`M5 checkpoint seek ${frame}`);}
+assert.equal(instance.exports.game_replay_seek(100001),0);
+console.log('PASS: M5 native replay file, all 100000 WASM hashes and checkpoint seeks');

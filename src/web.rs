@@ -80,7 +80,7 @@ pub fn conformance_trace(ticks: u32) -> Result<Vec<u64>, JsValue> {
 
 #[wasm_bindgen]
 pub struct WebGame {
-    game: crate::game::Game<crate::language::ScriptStage>,
+    session: crate::game::debug::DebugSession<crate::language::ScriptStage>,
     renderer: crate::graphics::GameRenderer,
     clock: crate::game::FrameClock,
 }
@@ -184,7 +184,8 @@ impl WebGame {
         .await
         .map_err(|e| JsValue::from_str(&e))?;
         Ok(Self {
-            game,
+            session: crate::game::debug::DebugSession::new(game)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?,
             renderer,
             clock: crate::game::FrameClock::default(),
         })
@@ -193,27 +194,31 @@ impl WebGame {
         self.renderer.adapter().to_string()
     }
     pub fn tick(&self) -> u64 {
-        self.game.hud().tick
+        self.session.game().hud().tick
     }
     pub fn score(&self) -> u64 {
-        self.game.hud().score
+        self.session.game().hud().score
     }
     pub fn state_hash(&self) -> String {
-        format!("{:016x}", self.game.state_hash())
+        format!("{:016x}", self.session.game().state_hash())
     }
     pub fn resource_hash(&self) -> String {
-        format!("{:016x}", self.game.resources().content_hash())
+        format!("{:016x}", self.session.game().resources().content_hash())
     }
     pub fn diagnostic(&self) -> String {
-        self.game
+        self.session
+            .game()
             .diagnostic()
             .map_or_else(String::new, ToString::to_string)
     }
     pub fn program_hash(&self) -> String {
-        format!("{:016x}", self.game.stage().vm().program().content_hash())
+        format!(
+            "{:016x}",
+            self.session.game().stage().vm().program().content_hash()
+        )
     }
     pub fn hud(&self) -> Vec<u32> {
-        let h = self.game.hud();
+        let h = self.session.game().hud();
         vec![
             h.health,
             h.bombs,
@@ -227,23 +232,27 @@ impl WebGame {
         ]
     }
     pub fn advanced_hud(&self) -> Vec<u64> {
-        self.game.advanced_hud().map_or_else(Vec::new, |h| {
-            vec![
-                u64::from(h.difficulty),
-                u64::from(h.power),
-                u64::from(h.drops),
-                u64::from(h.boss_phase),
-                u64::from(h.phase_ticks),
-                u64::from(h.phases_started),
-                h.collected,
-                h.cancelled,
-                h.phase_bonus,
-            ]
-        })
+        self.session
+            .game()
+            .advanced_hud()
+            .map_or_else(Vec::new, |h| {
+                vec![
+                    u64::from(h.difficulty),
+                    u64::from(h.power),
+                    u64::from(h.drops),
+                    u64::from(h.boss_phase),
+                    u64::from(h.phase_ticks),
+                    u64::from(h.phases_started),
+                    h.collected,
+                    h.cancelled,
+                    h.phase_bonus,
+                ]
+            })
     }
     /// Bulk beam geometry, ten numeric fields per segment, matching the C POD.
     pub fn laser_segments(&self) -> Vec<f64> {
-        self.game
+        self.session
+            .game()
             .laser_segments()
             .flat_map(|s| {
                 [
@@ -264,11 +273,19 @@ impl WebGame {
     pub fn step(&mut self, x: i32, y: i32, flags: u32) -> Result<Vec<u32>, JsValue> {
         let input = crate::game::GameInput::from_flags(x, y, flags)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        self.game
-            .step(input)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let before = self.session.game().hud().tick;
+        let advanced = if self.session.paused() {
+            self.session.single_step(input)
+        } else {
+            self.session.advance(input)
+        }
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        if !advanced || self.session.game().hud().tick != before.saturating_add(1) {
+            return Ok(Vec::new());
+        }
         Ok(self
-            .game
+            .session
+            .game()
             .audio_events()
             .iter()
             .map(|e| e.resource_id)
@@ -280,15 +297,135 @@ impl WebGame {
         }
         Ok(self.clock.advance(
             std::time::Duration::from_secs_f64(milliseconds / 1000.0),
-            active,
+            active && !self.session.paused(),
         ) as u32)
     }
     pub fn reset_clock(&mut self) {
         self.clock.reset();
     }
+    pub fn set_paused(&mut self, value: bool) {
+        self.session.set_paused(value);
+        self.clock.reset();
+    }
+    pub fn set_hitboxes(&mut self, value: bool) {
+        self.session.set_hitboxes(value);
+    }
+    pub fn set_performance_panel(&mut self, value: bool) {
+        self.session.set_performance_visible(value);
+    }
+    pub fn observe_frame(&mut self, update: f64, draw: f64, total: f64) -> bool {
+        self.session.observe_frame(update, draw, total)
+    }
+    pub fn debug_status(&self) -> String {
+        let p = self.session.performance();
+        serde_json::json!({"paused":self.session.paused(),"recording":self.session.recording(),"playback":self.session.playback(),"frame":self.session.replay_frame(),"length":self.session.replay_length(),"hitboxes":self.session.hitboxes(),"performance":self.session.performance_visible(),"samples":p.samples,"updateMs":p.update_ms,"drawMs":p.draw_ms,"frameMs":p.frame_ms,"updateP95":p.update_p95_ms,"frameP95":p.frame_p95_ms}).to_string()
+    }
+    pub fn checkpoint(&self) -> Result<Vec<u8>, JsValue> {
+        self.session
+            .game()
+            .checkpoint()
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+    pub fn restore_checkpoint(&mut self, bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let old = self
+            .session
+            .restore(&bytes)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.clock.reset();
+        old.map_or(Ok(Vec::new()), |r| {
+            r.to_bytes().map_err(|e| JsValue::from_str(&e.to_string()))
+        })
+    }
+    pub fn start_recording(&mut self, interval: u32) -> Result<(), JsValue> {
+        self.session
+            .start_recording(
+                crate::game::replay::RecordingOptions {
+                    checkpoint_interval: interval,
+                    ..Default::default()
+                },
+                "Browser run",
+            )
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+    pub fn stop_recording(&mut self) -> Result<Vec<u8>, JsValue> {
+        self.session
+            .stop_recording()
+            .and_then(|r| r.to_bytes().map_err(Into::into))
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+    pub fn load_replay(&mut self, bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let replay = std::sync::Arc::new(
+            crate::game::replay::GameReplay::from_bytes(&bytes)
+                .map_err(|e| JsValue::from_str(&e.to_string()))?,
+        );
+        let old = self
+            .session
+            .load_replay(replay)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.clock.reset();
+        old.map_or(Ok(Vec::new()), |r| {
+            r.to_bytes().map_err(|e| JsValue::from_str(&e.to_string()))
+        })
+    }
+    pub fn seek(&mut self, frame: u32) -> Result<(), JsValue> {
+        self.session
+            .seek(frame as usize)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.clock.reset();
+        Ok(())
+    }
+    pub fn fast_forward(&mut self, frames: u32, flags: u32) -> Result<u32, JsValue> {
+        let input = crate::game::GameInput::from_flags(0, 0, flags)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let n = self
+            .session
+            .fast_forward(frames as usize, input)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.clock.reset();
+        Ok(n as u32)
+    }
+    pub fn practice(&mut self, phase: u32) -> Result<Vec<u8>, JsValue> {
+        let old = self
+            .session
+            .practice(phase)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.clock.reset();
+        old.map_or(Ok(Vec::new()), |r| {
+            r.to_bytes().map_err(|e| JsValue::from_str(&e.to_string()))
+        })
+    }
+    pub fn reload(
+        &mut self,
+        source: String,
+        manifest: String,
+        atlas: Vec<u8>,
+    ) -> Result<Vec<u8>, JsValue> {
+        let pack = crate::resources::ResourcePack::from_json(&manifest, atlas)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let prepared = self
+            .renderer
+            .prepare_resources(&pack)
+            .map_err(|e| JsValue::from_str(&e))?;
+        let old = self
+            .session
+            .reload("stage.graze", &source, pack)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.renderer.commit_resources(prepared);
+        self.clock.reset();
+        old.map_or(Ok(Vec::new()), |r| {
+            r.to_bytes().map_err(|e| JsValue::from_str(&e.to_string()))
+        })
+    }
+    pub fn inspect(&self) -> String {
+        let game = self.session.game();
+        let vm = game.stage().vm();
+        let tasks:Vec<_>=vm.inspect_tasks().iter().map(|t|serde_json::json!({"slot":t.handle.slot,"generation":t.handle.generation,"state":format!("{:?}",t.state),"wake":t.wake_tick.to_string(),"owner":t.owner.map(|h|format!("{:?}:{}:{}",h.kind(),h.slot(),h.generation())),"frames":t.frames.iter().map(|f|serde_json::json!({"function":f.function,"pc":f.pc,"line":f.line,"column":f.column,"start":f.span.start,"end":f.span.end,"registers":f.registers.iter().map(|v|format!("{v:?}")).collect::<Vec<_>>()})).collect::<Vec<_>>()})).collect();
+        let entities:Vec<_>=game.simulation().snapshots().take(256).map(|e|serde_json::json!({"kind":e.handle.kind() as u32,"slot":e.handle.slot(),"generation":e.handle.generation(),"xRaw":e.position.x.bits(),"yRaw":e.position.y.bits(),"radiusRaw":e.collider.radius().bits(),"health":e.health})).collect();
+        serde_json::json!({"tick":game.hud().tick.to_string(),"hash":game.state_hash().to_string(),"file":vm.program().source_name(),"program":format!("{:016x}",vm.program().content_hash()),"tasks":tasks,"entities":entities,"totalEntities":game.simulation().enemy_count()+game.simulation().projectile_count()+1+game.advanced_hud().map_or(0,|h|h.drops as usize)}).to_string()
+    }
     pub fn restart(&mut self) -> Result<(), JsValue> {
         self.clock.reset();
-        self.game
+        self.session
             .restart()
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
@@ -298,7 +435,18 @@ impl WebGame {
     }
     pub fn draw(&mut self) -> Result<bool, JsValue> {
         self.renderer
-            .draw(&self.game)
+            .draw_debug(
+                self.session.game(),
+                crate::graphics::DebugDraw {
+                    hitboxes: self.session.hitboxes(),
+                    paused: self.session.paused(),
+                    tasks: self.session.game().stage().vm().task_count() as u32,
+                    performance: self
+                        .session
+                        .performance_visible()
+                        .then(|| self.session.performance()),
+                },
+            )
             .map_err(|e| JsValue::from_str(&e))
     }
 }

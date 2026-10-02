@@ -143,6 +143,35 @@ int32_t grazer_game_create_advanced(const GrazerGameConfig *config, const uint8_
 /* Returns INVALID_ARGUMENT for legacy games. */
 int32_t grazer_game_advanced_hud(const GrazerGame *game, GrazerAdvancedHud *out);
 int32_t grazer_game_lasers(const GrazerGame *game, GrazerLaserSegment *out, uint32_t capacity, uint32_t *required);
+
+/* Additive M5 API v1. Binary checkpoints/replays independently versioned.
+ * They bind protocols, stage/program, config/seed and the full resource digest.
+ * C restoration uses the builtin pack, as do the C game constructors.
+ * Save/restore/load/seek/clone may allocate; successful playback steps reuse
+ * core buffers. Input frames include resets; frame differs from world tick.
+ * Replay input is copied. Owned handles are serial-call, aligned and nonaliasing
+ * under the same pointer/lifetime rules as existing game functions.
+ */
+#define GRAZER_CHECKPOINT_API_VERSION 1u
+enum { GRAZER_REPLAY_DATA_ERROR=7, GRAZER_REPLAY_INCOMPATIBLE=8, GRAZER_REPLAY_DIVERGED=9 };
+typedef struct GrazerReplayPlayer GrazerReplayPlayer;
+typedef struct {
+    uint64_t frame, tick, frames;
+    uint32_t stopped, component; /* UINT32_MAX means no component divergence */
+    uint64_t expected, actual;
+} GrazerReplayStatus;
+uint32_t grazer_checkpoint_api_version(void);
+int32_t grazer_game_checkpoint(const GrazerGame *game, uint8_t *out, uint32_t capacity, uint32_t *required);
+int32_t grazer_game_restore_checkpoint(const uint8_t *bytes, uint32_t length, GrazerGame **out);
+int32_t grazer_replay_load(const uint8_t *bytes, uint32_t length, GrazerReplayPlayer **out);
+void grazer_replay_destroy(GrazerReplayPlayer *player);
+/* advanced=1 for a verified frame, 0 at EOF; divergence stops future steps. */
+int32_t grazer_replay_step(GrazerReplayPlayer *player, uint32_t *advanced);
+/* 0..=frames; successful seek clears divergence, failed seek preserves state. */
+int32_t grazer_replay_seek(GrazerReplayPlayer *player, uint64_t frame);
+int32_t grazer_replay_state_hash(const GrazerReplayPlayer *player, uint64_t *out);
+int32_t grazer_replay_status(const GrazerReplayPlayer *player, GrazerReplayStatus *out);
+int32_t grazer_replay_clone_game(const GrazerReplayPlayer *player, GrazerGame **out);
 #ifdef __cplusplus
 }
 #endif

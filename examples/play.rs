@@ -8,8 +8,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 mod native {
     use grazer::{
         audio::DesktopAudio,
-        game::{FrameClock, Game, GameConfig, GameInput},
-        graphics::GameRenderer,
+        game::{
+            FrameClock, Game, GameConfig, GameInput,
+            debug::DebugSession,
+            replay::{GameReplay, RecordingOptions},
+        },
+        graphics::{DebugDraw, GameRenderer},
         language::{Program, ScriptStage, VmLimits},
         resources::ResourcePack,
     };
@@ -22,7 +26,13 @@ mod native {
         window::{Window, WindowId},
     };
     struct App {
-        game: Game<ScriptStage>,
+        session: DebugSession<ScriptStage>,
+        script_path: String,
+        project_path: String,
+        record_path: Option<String>,
+        watch: bool,
+        last_watch: Instant,
+        checkpoint: Option<Vec<u8>>,
         window: Option<Arc<Window>>,
         renderer: Option<GameRenderer>,
         audio: Option<DesktopAudio>,
@@ -38,6 +48,79 @@ mod native {
         autoplay: bool,
         error: Option<String>,
         samples: Vec<f64>,
+    }
+    impl App {
+        fn archive(&mut self, replay: Option<GameReplay>) {
+            if let Some(replay) = replay {
+                let path = self
+                    .record_path
+                    .clone()
+                    .unwrap_or_else(|| "target/desktop-replay.grz".into());
+                match replay.to_bytes().and_then(|bytes| {
+                    std::fs::write(&path, bytes).map_err(|_| {
+                        grazer::game::replay::ReplayError::Data("cannot save recording")
+                    })
+                }) {
+                    Ok(()) => println!("saved replay={path} frames={}", replay.frames().len()),
+                    Err(e) => self.error = Some(e.to_string()),
+                }
+            }
+        }
+        fn reload_files(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            let pack = ResourcePack::load(&self.project_path)?;
+            let stage = if self.script_path.ends_with(".gzb") {
+                ScriptStage::new(
+                    Arc::new(Program::from_bytes(&std::fs::read(&self.script_path)?)?),
+                    self.session.game().stage().vm().limits(),
+                    self.session.game().seed(),
+                )?
+            } else {
+                ScriptStage::compile(
+                    &self.script_path,
+                    &std::fs::read_to_string(&self.script_path)?,
+                    self.session.game().stage().vm().limits(),
+                    self.session.game().seed(),
+                )?
+            };
+            let prepared = self
+                .renderer
+                .as_ref()
+                .ok_or("renderer not ready")?
+                .prepare_resources(&pack)?;
+            let old = self.session.reload_stage(stage, pack)?;
+            self.renderer
+                .as_mut()
+                .expect("renderer")
+                .commit_resources(prepared);
+            self.archive(old);
+            self.paused = true;
+            self.clock.reset();
+            self.last = Instant::now();
+            self.error = None;
+            println!(
+                "reloaded source={} content={:016x}",
+                self.script_path,
+                self.session.game().stage().vm().program().content_hash()
+            );
+            Ok(())
+        }
+        fn reload_if_changed(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            let program = if self.script_path.ends_with(".gzb") {
+                Program::from_bytes(&std::fs::read(&self.script_path)?)?
+            } else {
+                Program::compile(
+                    &self.script_path,
+                    &std::fs::read_to_string(&self.script_path)?,
+                )?
+            };
+            let pack = ResourcePack::load(&self.project_path)?;
+            if program.content_hash() != self.session.game().stage().vm().program().content_hash()
+                || pack.content_hash() != self.session.game().resources().content_hash()
+            {
+                self.reload_files()?;
+            }
+            Ok(())
+        }
     }
     impl ApplicationHandler for App {
         fn exiting(&mut self, _: &ActiveEventLoop) {
@@ -70,15 +153,15 @@ mod native {
                     surface,
                     size.width,
                     size.height,
-                    self.game.presentation_capacity(),
-                    self.game.resources(),
+                    self.session.game().presentation_capacity(),
+                    self.session.game().resources(),
                 ))?;
                 println!(
                     "adapter={} viewport={}x{} resources={:016x}",
                     renderer.adapter(),
                     size.width,
                     size.height,
-                    self.game.resources().content_hash()
+                    self.session.game().resources().content_hash()
                 );
                 self.renderer = Some(renderer);
                 self.window = Some(window);
@@ -121,11 +204,12 @@ mod native {
                             KeyCode::ShiftLeft | KeyCode::ShiftRight => self.input.focus = pressed,
                             KeyCode::KeyR | KeyCode::Enter => {
                                 if pressed && self.error.is_some() {
-                                    if let Err(error) = self.game.restart() {
+                                    if let Err(error) = self.session.restart() {
                                         self.error = Some(error.to_string());
                                     } else {
                                         self.error = None;
                                         self.paused = false;
+                                        self.session.set_paused(false);
                                         self.clock.reset();
                                         self.last = Instant::now();
                                     }
@@ -135,6 +219,7 @@ mod native {
                             }
                             KeyCode::KeyP if pressed && !event.repeat => {
                                 self.paused = !self.paused;
+                                self.session.set_paused(self.paused);
                                 self.clock.reset();
                                 self.last = Instant::now();
                                 if let Some(audio) = &self.audio {
@@ -146,6 +231,70 @@ mod native {
                                     if let Err(error) = result {
                                         eprintln!("Audio pause/resume: {error}");
                                     }
+                                }
+                            }
+                            KeyCode::KeyN if pressed && !event.repeat && self.paused => {
+                                if let Err(e) = self.session.single_step(GameInput {
+                                    fire: self.autoplay,
+                                    ..GameInput::default()
+                                }) {
+                                    self.error = Some(e.to_string());
+                                }
+                            }
+                            KeyCode::F1 if pressed && !event.repeat => {
+                                self.session.set_hitboxes(!self.session.hitboxes())
+                            }
+                            KeyCode::F2 if pressed && !event.repeat => self
+                                .session
+                                .set_performance_visible(!self.session.performance_visible()),
+                            KeyCode::F5 if pressed && !event.repeat => {
+                                if let Err(e) = self.reload_files() {
+                                    self.error = Some(e.to_string());
+                                    self.paused = true;
+                                    self.session.set_paused(true);
+                                }
+                            }
+                            KeyCode::F6 if pressed && !event.repeat => {
+                                match self.session.game().checkpoint() {
+                                    Ok(bytes) => self.checkpoint = Some(bytes),
+                                    Err(e) => self.error = Some(e.to_string()),
+                                }
+                            }
+                            KeyCode::F7 if pressed && !event.repeat => {
+                                if let Some(bytes) = self.checkpoint.clone() {
+                                    match self.session.restore(&bytes) {
+                                        Ok(old) => {
+                                            self.archive(old);
+                                            self.paused = true;
+                                            self.clock.reset();
+                                        }
+                                        Err(e) => self.error = Some(e.to_string()),
+                                    }
+                                }
+                            }
+                            KeyCode::F8 if pressed && !event.repeat => {
+                                if let Err(e) = self.session.fast_forward(
+                                    600,
+                                    GameInput {
+                                        fire: true,
+                                        ..GameInput::default()
+                                    },
+                                ) {
+                                    self.error = Some(e.to_string());
+                                }
+                                self.clock.reset();
+                            }
+                            KeyCode::F9 if pressed && !event.repeat => {
+                                if self.session.recording() {
+                                    match self.session.stop_recording() {
+                                        Ok(replay) => self.archive(Some(replay)),
+                                        Err(e) => self.error = Some(e.to_string()),
+                                    }
+                                } else if let Err(e) = self
+                                    .session
+                                    .start_recording(RecordingOptions::default(), "Desktop run")
+                                {
+                                    self.error = Some(e.to_string());
                                 }
                             }
                             KeyCode::Escape => event_loop.exit(),
@@ -161,6 +310,14 @@ mod native {
                         return;
                     }
                     let start = Instant::now();
+                    if self.watch && self.last_watch.elapsed().as_secs_f64() >= 1.0 {
+                        self.last_watch = Instant::now();
+                        if let Err(e) = self.reload_if_changed() {
+                            self.error = Some(e.to_string());
+                            self.paused = true;
+                            self.session.set_paused(true);
+                        }
+                    }
                     let count = self.clock.advance(elapsed, self.active && !self.paused);
                     for _ in 0..count {
                         let mut input = self.input;
@@ -169,19 +326,51 @@ mod native {
                         if self.autoplay {
                             input.fire = true;
                         }
-                        if let Err(error) = self.game.step(input) {
+                        if input.restart {
+                            if let Err(e) = self.session.restart() {
+                                self.error = Some(e.to_string());
+                            }
+                            self.input.restart = false;
+                            self.clock.reset();
+                            continue;
+                        }
+                        let before_tick = self.session.game().hud().tick;
+                        let result = self.session.advance(input);
+                        if matches!(result, Ok(false)) {
+                            self.paused = self.session.paused();
+                            break;
+                        }
+                        if let Err(error) = result {
                             self.error = Some(error.to_string());
                             eprintln!("Stage paused: {error}");
                             self.paused = true;
+                            self.session.set_paused(true);
                             self.clock.reset();
                             break;
                         }
-                        if let Some(audio) = &mut self.audio {
-                            audio.events(self.game.audio_events(), self.game.resources());
+                        if self.session.game().hud().tick == before_tick.saturating_add(1)
+                            && let Some(audio) = &mut self.audio
+                        {
+                            audio.events(
+                                self.session.game().audio_events(),
+                                self.session.game().resources(),
+                            );
                         }
                     }
+                    let draw_start = Instant::now();
                     if let Some(renderer) = &mut self.renderer {
-                        match renderer.draw(&self.game) {
+                        match renderer.draw_debug(
+                            self.session.game(),
+                            DebugDraw {
+                                hitboxes: self.session.hitboxes(),
+                                paused: self.paused,
+                                tasks: self.session.game().stage().vm().task_count() as u32,
+                                performance: self
+                                    .session
+                                    .performance_visible()
+                                    .then(|| self.session.performance()),
+                            },
+                        ) {
                             Ok(true) => self.frames += 1,
                             Ok(false) => return,
                             Err(error) => {
@@ -191,13 +380,19 @@ mod native {
                             }
                         }
                     }
+                    self.session.observe_frame(
+                        draw_start.duration_since(start).as_secs_f64() * 1000.0,
+                        draw_start.elapsed().as_secs_f64() * 1000.0,
+                        start.elapsed().as_secs_f64() * 1000.0,
+                    );
+                    self.paused = self.session.paused();
                     if self.frames > 120 && self.samples.len() < 1200 {
                         self.samples.push(start.elapsed().as_secs_f64() * 1000.0);
                     }
                     if self.frames.is_multiple_of(30)
                         && let Some(window) = &self.window
                     {
-                        let hud = self.game.hud();
+                        let hud = self.session.game().hud();
                         window.set_title(&format!(
                             "Grazer | HP {}  BOMBS {}  SCORE {} | {}",
                             hud.health,
@@ -238,10 +433,33 @@ mod native {
         let mut script_path = None;
         let mut difficulty = grazer::advanced::Difficulty::Normal;
         let mut health = 0;
+        let mut practice = 0;
+        let mut record_path = None;
+        let mut replay_path = None;
+        let mut checkpoint_path = None;
+        let mut start_paused = false;
+        let mut hitboxes = false;
+        let mut performance = false;
+        let mut watch = false;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--frames" => limit = args.next().ok_or("--frames needs a count")?.parse()?,
                 "--autoplay" => autoplay = true,
+                "--practice" => {
+                    practice = args
+                        .next()
+                        .ok_or("--practice needs Boss phase 1..3")?
+                        .parse()?
+                }
+                "--record" => record_path = Some(args.next().ok_or("--record needs output path")?),
+                "--replay" => replay_path = Some(args.next().ok_or("--replay needs input path")?),
+                "--checkpoint" => {
+                    checkpoint_path = Some(args.next().ok_or("--checkpoint needs input path")?)
+                }
+                "--paused" => start_paused = true,
+                "--hitboxes" => hitboxes = true,
+                "--performance" => performance = true,
+                "--watch" => watch = true,
                 "--health" => health = args.next().ok_or("--health needs a count")?.parse()?,
                 "--difficulty" => {
                     difficulty = match args.next().as_deref() {
@@ -258,7 +476,7 @@ mod native {
                 _ => return Err(format!("unknown option {arg}").into()),
             }
         }
-        let pack = if let Some(path) = project {
+        let pack = if let Some(path) = &project {
             ResourcePack::load(path)?
         } else {
             ResourcePack::from_json(
@@ -266,17 +484,17 @@ mod native {
                 include_bytes!("../assets/demo/sprites.rgba").to_vec(),
             )?
         };
-        let stage = if let Some(path) = script_path {
+        let stage = if let Some(path) = &script_path {
             if path.ends_with(".gzb") {
                 ScriptStage::new(
-                    Arc::new(Program::from_bytes(&std::fs::read(&path)?)?),
+                    Arc::new(Program::from_bytes(&std::fs::read(path)?)?),
                     VmLimits::default(),
                     42,
                 )?
             } else {
                 ScriptStage::compile(
-                    &path,
-                    &std::fs::read_to_string(&path)?,
+                    path,
+                    &std::fs::read_to_string(path)?,
                     VmLimits::default(),
                     42,
                 )?
@@ -312,8 +530,31 @@ mod native {
                 None
             }
         };
+        let mut session = DebugSession::new(game)?;
+        if practice > 0 {
+            session.practice(practice)?;
+        }
+        if let Some(path) = replay_path {
+            session.load_replay(Arc::new(GameReplay::from_bytes(&std::fs::read(path)?)?))?;
+        }
+        if let Some(path) = checkpoint_path {
+            session.restore(&std::fs::read(path)?)?;
+        }
+        session.set_paused(start_paused);
+        session.set_hitboxes(hitboxes);
+        session.set_performance_visible(performance);
+        if record_path.is_some() {
+            session.start_recording(RecordingOptions::default(), "Desktop run")?;
+        }
         let mut app = App {
-            game,
+            session,
+            script_path: script_path
+                .unwrap_or_else(|| "assets/demo/advanced_showcase.graze".into()),
+            project_path: project.unwrap_or_else(|| "assets/demo/project.json".into()),
+            record_path,
+            watch,
+            last_watch: Instant::now(),
+            checkpoint: None,
             window: None,
             renderer: None,
             audio,
@@ -323,7 +564,7 @@ mod native {
             keys: [false; 4],
             active: true,
             drawable: true,
-            paused: false,
+            paused: start_paused,
             frames: 0,
             limit,
             autoplay,
@@ -331,15 +572,24 @@ mod native {
             samples: Vec::with_capacity(1200),
         };
         EventLoop::new()?.run_app(&mut app)?;
+        if app.session.recording() {
+            let replay = app.session.stop_recording()?;
+            let path = app
+                .record_path
+                .clone()
+                .unwrap_or_else(|| "target/desktop-replay.grz".into());
+            std::fs::write(&path, replay.to_bytes()?)?;
+            println!("recorded replay={path} frames={}", replay.frames().len());
+        }
         if let Some(error) = app.error {
             return Err(error.into());
         }
         println!(
             "frames={} tick={} phase={:?} hash={:016x}",
             app.frames,
-            app.game.hud().tick,
-            app.game.phase(),
-            app.game.state_hash()
+            app.session.game().hud().tick,
+            app.session.game().phase(),
+            app.session.game().state_hash()
         );
         if let Some(audio) = &app.audio {
             println!(

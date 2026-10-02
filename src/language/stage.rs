@@ -10,6 +10,9 @@ pub struct ScriptStage {
     vm: Vm,
 }
 impl ScriptStage {
+    pub(crate) fn from_vm(vm: Vm) -> Self {
+        Self { vm }
+    }
     pub fn new(program: Arc<Program>, limits: VmLimits, seed: u64) -> Result<Self, Diagnostic> {
         Ok(Self {
             vm: Vm::new(program, limits, seed)?,

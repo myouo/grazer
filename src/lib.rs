@@ -7,6 +7,8 @@
 //! tasks, resource budgets, source diagnostics and serialized VM continuation.
 //! [`advanced`] adds M4 patterns, composed motion, timed persistent lasers,
 //! drops and difficulty. [`game::showcase`] runs the ten-minute script stage.
+//! [`checkpoint`] and [`game::replay`] provide complete portable game snapshots
+//! and verified playback; [`game::debug`] adds host-side iteration controls.
 //! Rendering is optional; the default build has no dependencies.
 //!
 //! ```
@@ -17,6 +19,7 @@
 //! # Ok::<(), grazer::SimulationError>(())
 //! ```
 
+pub mod checkpoint;
 pub mod demo;
 mod fixed;
 pub mod game;

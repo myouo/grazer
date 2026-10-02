@@ -17,8 +17,9 @@
 //! ```
 
 pub mod advanced;
+mod checkpoint;
 pub mod demo;
-mod geometry;
+pub(crate) mod geometry;
 mod pool;
 pub mod replay;
 pub use geometry::{Collider, InvalidCollider, MAX_CURVE_POINTS, Vec2};

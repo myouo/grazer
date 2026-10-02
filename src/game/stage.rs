@@ -31,7 +31,7 @@ pub trait Stage: Clone {
 }
 #[derive(Clone, Default)]
 pub struct DemoStage {
-    boss: Option<EntityHandle>,
+    pub(super) boss: Option<EntityHandle>,
 }
 impl Stage for DemoStage {
     const CONTENT_ID: u64 = 0x47525a4d32000001;

@@ -2,7 +2,10 @@
 
 Deterministic Rust 2D bullet-hell (STG) runtime.
 
-**M4 / experimental, repository sources:** deterministic ring/fan/aimed/spiral
+**M5 / experimental, repository sources:** complete Game/world/VM checkpoints,
+resource-bound replay, verified seek/fast-forward, Boss practice, pause/step,
+collision outlines, CPU timings, state inspection and atomic source/resource
+reload. The M4 creation tools provide deterministic ring/fan/aimed/spiral
 patterns, composed acceleration/turning, telegraphed straight/curve lasers,
 multi-phase Bosses, bullet cancellation, point/power/Bomb drops, scoring and
 three difficulties. Desktop/WebGPU/WebGL2 default to the ten-minute scripted
@@ -10,10 +13,10 @@ Prism Passage: 70 waves and three Boss phases. Nine focused scripts under
 `assets/examples` demonstrate each ability. The typed language retains verified
 bytecode, cooperative tasks, budgets, source diagnostics and VM save/restore.
 The shared headless core uses fixed 60Hz, checked Q16.16, generational pools,
-swept collision, grazing and input/command replay. Full saved gameplay replay/
-debug tools, stable SDK/ABI and editor are later milestones.
+swept collision, grazing and input/command replay. Stable SDK/ABI, final platform/
+performance acceptance and editor remain later milestones.
 Public APIs may change before 0.1.0. The published `0.1.0-alpha.1` crate contains
-M0; these M1/M2/M3/M4 additions have not been published.
+M0; these M1–M5 additions have not been published.
 
 ```rust
 use grazer::{GameInput, advanced::Difficulty, game::showcase};
@@ -41,6 +44,8 @@ and [M1 contracts](docs/m1-headless.md).
 ```sh
 cargo test --workspace
 cargo run --release --example play --features desktop
+# Iteration: --practice 2 --hitboxes --performance; --record target/run.grz;
+# --replay target/run.grz; --script my_stage.graze --watch; --paused.
 # Optional --difficulty easy|normal|hard; --health 10000 for validation.
 # Optional --script my_stage.graze or --script target/my_stage.gzb.
 cargo run --release --example script -- compile assets/demo/advanced_showcase.graze target/advanced_showcase.gzb
@@ -105,6 +110,7 @@ cargo run --release --example trace -- 100000 m1 > target/native-simulation-trac
 cargo run --release --example trace -- 100000 m2 > target/native-game-trace.txt
 cargo run --release --example trace -- 100000 m3 > target/native-script-trace.txt
 cargo run --release --example trace -- 100000 m4 > target/native-advanced-trace.txt
+cargo run --release --example replay -- record target/showcase.grz 100000
 cargo run --release --example script -- restore-check > target/native-vm-restore.txt
 node scripts/check-wasm.mjs
 node scripts/benchmark-wasm.mjs 30000 1200 circle
@@ -125,17 +131,19 @@ node scripts/benchmark-wasm.mjs 30000 1200 circle
   container layouts or GPU handles cross the ABI.
 - `Game::clone`, `Simulation::clone` and `Runtime::clone` are in-process checkpoints. M1 replay
   format 1 records configuration, seed, inputs, accepted commands and per-tick
-  hashes; incompatible versions are rejected. Serialized checkpoints, resource
-  metadata and a long-term compatibility promise are later milestones. Playable
-  Game input traces must also match stage content ID and resource content hash;
-  the full saved gameplay replay/debug workflow is M5.
+  hashes; incompatible versions are rejected. M5 complete checkpoints and Game
+  replay bind program/resources/config/seed, preserve pools/VM/RNG/score/control
+  edges and report the first component divergence. Full-history verification and
+  checkpoint seek are available. A long-term compatibility promise starts at M6.
 
 See [M0 platform validation](docs/m0-validation.md) and
 [M1 core validation](docs/m1-validation.md) for actual coverage and performance
 evidence, and [M2 playable validation](docs/m2-validation.md) for the shared SDK.
 See [M3 language and VM](docs/m3-language.md) and [M3 validation](docs/m3-validation.md)
 for script authoring, and [M4 validation](docs/m4-validation.md) for actual
-ten-minute stage, native/C/WASM/browser and allocation evidence. Next milestones
-add replay/debug tools, stable SDK/ABI and editor integration, in that order.
+ten-minute stage evidence. See [M5 iteration tools](docs/m5-iteration.md) and
+[M5 validation](docs/m5-validation.md) for recording/checkpoints, practice, debug
+controls and actual host evidence. Next milestones are M6 stable SDK/ABI and
+formal platform/performance acceptance, then M7 editor integration.
 
 Licensed under MIT OR Apache-2.0.

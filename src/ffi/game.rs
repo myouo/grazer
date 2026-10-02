@@ -30,9 +30,9 @@ pub struct GrazerResourceInfo {
     pub content_hash: u64,
 }
 pub struct GrazerGame {
-    inner: HostedGame,
+    pub(super) inner: HostedGame,
 }
-enum HostedGame {
+pub(super) enum HostedGame {
     Native(Box<Game>),
     Script(Box<Game<crate::language::ScriptStage>>),
 }
@@ -385,7 +385,7 @@ pub unsafe extern "C" fn grazer_game_sound_assets(
         }
     })
 }
-unsafe fn copy<T: Copy>(
+pub(super) unsafe fn copy<T: Copy>(
     items: impl Iterator<Item = T>,
     count: usize,
     out: *mut T,

@@ -41,6 +41,50 @@ unsafe impl GlobalAlloc for CountingAllocator {
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 #[test]
+fn restored_game_replay_and_live_debug_controls_reuse_tick_buffers() {
+    let mut recorder = grazer::game::replay::GameRecorder::new(
+        grazer::language::conformance_game(),
+        grazer::game::replay::RecordingOptions {
+            max_frames: 1000,
+            checkpoint_interval: 0,
+        },
+        "allocation",
+    )
+    .unwrap();
+    for frame in 0..1000 {
+        recorder
+            .step(grazer::game::conformance_input(frame))
+            .unwrap();
+    }
+    let replay = std::sync::Arc::new(
+        grazer::game::replay::GameReplay::from_bytes(&recorder.finish().to_bytes().unwrap())
+            .unwrap(),
+    );
+    let mut player = grazer::game::replay::ReplayPlayer::<grazer::language::ScriptStage>::new(
+        replay,
+        std::sync::Arc::new(grazer::resources::ResourcePack::builtin()),
+    )
+    .unwrap();
+    let restored = grazer::Game::<grazer::language::ScriptStage>::restore_checkpoint(
+        player.game().resource_pack(),
+        &player.game().checkpoint().unwrap(),
+    )
+    .unwrap();
+    let mut session = grazer::game::debug::DebugSession::new(restored).unwrap();
+    session.set_paused(true);
+    ALLOCATIONS.set(0);
+    TRACK.set(true);
+    for _ in 0..1000 {
+        assert!(player.step().unwrap());
+        session.single_step(grazer::GameInput::default()).unwrap();
+        session.observe_frame(1.0, 2.0, 3.0);
+        std::hint::black_box(session.performance());
+    }
+    TRACK.set(false);
+    assert_eq!(ALLOCATIONS.get(), 0);
+}
+
+#[test]
 fn advanced_stage_motion_lasers_death_drops_and_snapshots_reuse_buffers() {
     let mut game = grazer::game::showcase::conformance_game().clone();
     ALLOCATIONS.set(0);

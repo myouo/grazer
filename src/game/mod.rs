@@ -10,7 +10,10 @@
 //! assert!(game.sprites().any(|sprite| sprite.resource_id == 4));
 //! # Ok::<(), grazer::GameError>(())
 //! ```
+pub mod checkpoint;
 mod clock;
+pub mod debug;
+pub mod replay;
 pub mod showcase;
 mod stage;
 use crate::advanced::{AdvancedConfig, DropKind, LaserSegment};
@@ -291,6 +294,15 @@ impl<S: Stage> Game<S> {
     }
     pub fn simulation(&self) -> &Simulation {
         &self.world
+    }
+    pub fn config(&self) -> GameConfig {
+        self.config
+    }
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+    pub fn resource_pack(&self) -> Arc<ResourcePack> {
+        self.resources.clone()
     }
     pub fn protocol_version(&self) -> u32 {
         if self.world.advanced_config().is_some() {

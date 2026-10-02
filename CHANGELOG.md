@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — M5
+
+- Add complete versioned Simulation/Game/stage/VM checkpoints, resource/program
+  identity, strict pool/state validation and output-preserving restore.
+- Add metadata-bound Game input/reset replay, periodic checkpoints, verified
+  seek/fast-forward and persistent first-component divergence diagnosis.
+- Add live/record/playback debug sessions, Boss practice starts, paused tick
+  stepping, entity/task/source/register inspection and a rolling CPU panel.
+- Add analytic collision outlines, browser replay/checkpoint import/export,
+  source editor and atomic atlas/tone/source reload; desktop keys/CLI/file watch.
+- Add M5 C checkpoint/replay hosts and actual native-file WASM playback/seek.
+  Retain all M0–M4 gameplay protocols, APIs and golden hashes.
+
 ## Unreleased — M4
 
 - Add dependency-free integer turn/polar/rotation helpers and atomic ring, fan,

@@ -26,6 +26,8 @@ jobs:
       - run: cargo run --release --example trace --locked -- 100000 m2 > target/native-game-trace.txt
       - run: cargo run --release --example trace --locked -- 100000 m3 > target/native-script-trace.txt
       - run: cargo run --release --example trace --locked -- 100000 m4 > target/native-advanced-trace.txt
+      - run: cargo run --release --example replay --locked -- record target/showcase.grz 100000
+      - run: cargo run --release --example replay --locked -- audit
       - run: cargo run --release --example script --locked -- restore-check > target/native-vm-restore.txt
       - name: C host (Unix)
         if: runner.os != 'Windows'
@@ -37,6 +39,8 @@ jobs:
           target/c_game target/native-game-trace.txt
           target/c_game target/native-script-trace.txt script
           target/c_game target/native-advanced-trace.txt advanced
+          cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/c_replay.c -Ltarget/release -lgrazer -Wl,-rpath,"$PWD/target/release" -o target/c_replay
+          target/c_replay target/showcase.grz target/native-advanced-trace.txt
       - name: C host (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -48,6 +52,8 @@ jobs:
           target/c_game.exe target/native-game-trace.txt
           target/c_game.exe target/native-script-trace.txt script
           target/c_game.exe target/native-advanced-trace.txt advanced
+          gcc -std=c11 -Wall -Wextra -Werror -Iinclude examples/c_replay.c target/release/grazer.dll -o target/c_replay.exe
+          target/c_replay.exe target/showcase.grz target/native-advanced-trace.txt
       - run: cargo package --locked
   wasm:
     runs-on: ubuntu-latest
@@ -66,6 +72,7 @@ jobs:
       - run: cargo run --release --example trace --locked -- 100000 m2 > target/native-game-trace.txt
       - run: cargo run --release --example trace --locked -- 100000 m3 > target/native-script-trace.txt
       - run: cargo run --release --example trace --locked -- 100000 m4 > target/native-advanced-trace.txt
+      - run: cargo run --release --example replay --locked -- record target/showcase.grz 100000
       - run: cargo run --release --example script --locked -- restore-check > target/native-vm-restore.txt
       - run: node scripts/check-wasm.mjs
       - run: node scripts/benchmark-wasm.mjs 128 10

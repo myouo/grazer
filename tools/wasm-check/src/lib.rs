@@ -3,6 +3,60 @@ use std::cell::RefCell;
 thread_local! {
     static TRACE: RefCell<Vec<u64>> = const { RefCell::new(Vec::new()) };
     static BENCHMARK: RefCell<Option<Benchmark>> = const { RefCell::new(None) };
+    static GAME_REPLAY_BYTES: RefCell<Vec<u8>> = const { RefCell::new(Vec::new()) };
+    static GAME_REPLAY_PLAYER: RefCell<Option<grazer::game::replay::ReplayPlayer<grazer::language::ScriptStage>>> = const { RefCell::new(None) };
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn game_replay_buffer(length: u32) -> *mut u8 {
+    if length as usize > grazer::game::replay::MAX_REPLAY_BYTES {
+        return std::ptr::null_mut();
+    }
+    GAME_REPLAY_BYTES.with(|bytes| {
+        let mut bytes = bytes.borrow_mut();
+        bytes.resize(length as usize, 0);
+        bytes.as_mut_ptr()
+    })
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn game_replay_load() -> u32 {
+    GAME_REPLAY_BYTES.with(|bytes| {
+        let bytes = bytes.borrow();
+        let result = grazer::game::replay::GameReplay::from_bytes(&bytes).and_then(|r| {
+            grazer::game::replay::ReplayPlayer::new(
+                std::sync::Arc::new(r),
+                std::sync::Arc::new(grazer::resources::ResourcePack::builtin()),
+            )
+        });
+        match result {
+            Ok(player) => {
+                GAME_REPLAY_PLAYER.with(|p| *p.borrow_mut() = Some(player));
+                1
+            }
+            Err(_) => 0,
+        }
+    })
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn game_replay_step() -> u32 {
+    GAME_REPLAY_PLAYER.with(|p| {
+        p.borrow_mut().as_mut().map_or(2, |p| match p.step() {
+            Ok(true) => 1,
+            Ok(false) => 0,
+            Err(_) => 2,
+        })
+    })
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn game_replay_hash() -> u64 {
+    GAME_REPLAY_PLAYER.with(|p| p.borrow().as_ref().map_or(0, |p| p.game().state_hash()))
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn game_replay_seek(frame: u32) -> u32 {
+    GAME_REPLAY_PLAYER.with(|p| {
+        p.borrow_mut()
+            .as_mut()
+            .map_or(0, |p| u32::from(p.seek(frame as usize).is_ok()))
+    })
 }
 struct Benchmark {
     world: grazer::Simulation,

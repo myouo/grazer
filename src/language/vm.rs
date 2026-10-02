@@ -197,7 +197,7 @@ impl Vm {
             generation: self.slots[slot as usize].generation,
         })
     }
-    fn live(&self, handle: TaskHandle) -> bool {
+    pub(super) fn live(&self, handle: TaskHandle) -> bool {
         self.slots
             .get(handle.slot as usize)
             .is_some_and(|s| s.active && !s.done && s.generation == handle.generation)

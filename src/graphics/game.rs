@@ -13,6 +13,14 @@ struct SpriteInstance {
     uv_origin: [f32; 2],
     uv_size: [f32; 2],
     color: [f32; 4],
+    geometry: [f32; 4],
+}
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DebugDraw {
+    pub hitboxes: bool,
+    pub paused: bool,
+    pub tasks: u32,
+    pub performance: Option<crate::game::debug::PerformanceSummary>,
 }
 pub struct GameRenderer {
     base: Renderer,
@@ -22,6 +30,11 @@ pub struct GameRenderer {
     instances: Vec<SpriteInstance>,
     capacity: usize,
     resource_hash: u64,
+    atlas_layout: wgpu::BindGroupLayout,
+}
+pub struct PreparedResources {
+    bind: wgpu::BindGroup,
+    hash: u64,
 }
 impl GameRenderer {
     pub async fn new(
@@ -119,6 +132,7 @@ impl GameRenderer {
                 },
             ],
         });
+        device.push_error_scope(wgpu::ErrorFilter::Validation);
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("textured stage sprites"),
             source: wgpu::ShaderSource::Wgsl(include_str!("game.wgsl").into()),
@@ -128,7 +142,7 @@ impl GameRenderer {
             bind_group_layouts: &[&layout],
             push_constant_ranges: &[],
         });
-        let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Float32x2,3=>Float32x2,4=>Float32x2,5=>Float32x4];
+        let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Float32x2,3=>Float32x2,4=>Float32x2,5=>Float32x4,6=>Float32x4];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("sprite atlas pipeline"),
             layout: Some(&pipeline_layout),
@@ -159,11 +173,15 @@ impl GameRenderer {
             cache: None,
         });
         let buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            // Pipeline validation must finish before this renderer is exposed.
             label: Some("reused sprite instances"),
             size: (capacity * std::mem::size_of::<SpriteInstance>()) as u64,
             usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
             mapped_at_creation: false,
         });
+        if let Some(error) = device.pop_error_scope().await {
+            return Err(format!("game shader/pipeline: {error}"));
+        }
         Ok(Self {
             base,
             pipeline,
@@ -172,6 +190,7 @@ impl GameRenderer {
             instances: Vec::with_capacity(capacity),
             capacity,
             resource_hash: resources.content_hash(),
+            atlas_layout: layout,
         })
     }
     pub fn adapter(&self) -> &str {
@@ -179,6 +198,85 @@ impl GameRenderer {
     }
     pub fn resize(&mut self, width: u32, height: u32) {
         self.base.resize(width, height);
+    }
+    /// Prepare a replacement atlas before committing a validated hot reload.
+    pub fn prepare_resources(&self, pack: &ResourcePack) -> Result<PreparedResources, String> {
+        if self.base.lost.load(Ordering::Relaxed) {
+            return Err("GPU device lost".into());
+        }
+        if pack.width() > self.base.device.limits().max_texture_dimension_2d
+            || pack.height() > self.base.device.limits().max_texture_dimension_2d
+        {
+            return Err("reload atlas exceeds GPU texture limits".into());
+        }
+        for &c in resources::FONT_CHARACTERS {
+            if pack
+                .sprite(resources::FONT_ID_BASE + u32::from(c))
+                .is_none()
+            {
+                return Err(format!("reload missing HUD glyph {c}"));
+            }
+        }
+        let texture = self.base.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("reload atlas"),
+            size: wgpu::Extent3d {
+                width: pack.width(),
+                height: pack.height(),
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.base.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            pack.atlas(),
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(pack.width() * 4),
+                rows_per_image: Some(pack.height()),
+            },
+            texture.size(),
+        );
+        let view = texture.create_view(&Default::default());
+        let sampler = self.base.device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Nearest,
+            min_filter: wgpu::FilterMode::Nearest,
+            ..Default::default()
+        });
+        let bind = self
+            .base
+            .device
+            .create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("reload atlas bind"),
+                layout: &self.atlas_layout,
+                entries: &[
+                    wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::TextureView(&view),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::Sampler(&sampler),
+                    },
+                ],
+            });
+        Ok(PreparedResources {
+            bind,
+            hash: pack.content_hash(),
+        })
+    }
+    pub fn commit_resources(&mut self, prepared: PreparedResources) {
+        self.bind = prepared.bind;
+        self.resource_hash = prepared.hash;
     }
     fn sprite(
         &mut self,
@@ -216,6 +314,7 @@ impl GameRenderer {
                 ((rgba >> 8) & 255) as f32 / 255.0,
                 (rgba & 255) as f32 / 255.0,
             ],
+            geometry: [0.0; 4],
         });
         Ok(())
     }
@@ -304,6 +403,151 @@ impl GameRenderer {
                     world,
                 )?;
             }
+        }
+        Ok(())
+    }
+    fn outline(
+        &mut self,
+        pack: &ResourcePack,
+        start: [f32; 2],
+        end: [f32; 2],
+        radius: f32,
+        rgba: u32,
+        world: [f32; 2],
+    ) -> Result<(), String> {
+        let dx = end[0] - start[0];
+        let dy = end[1] - start[1];
+        let length = dx.hypot(dy);
+        let (x, y) = if length == 0.0 {
+            (1.0, 0.0)
+        } else {
+            (dx / length, dy / length)
+        };
+        let horizontal = length + radius * 2.0;
+        let width = radius * 2.0;
+        self.sprite(
+            pack,
+            resources::SOLID,
+            [(start[0] + end[0]) * 0.5, (start[1] + end[1]) * 0.5 + 64.0],
+            [horizontal, width],
+            rgba,
+            world,
+        )?;
+        let last = self.instances.last_mut().expect("outline quad");
+        last.horizontal = [x * horizontal / world[0], -y * horizontal / world[1]];
+        last.vertical = [-y * width / world[0], -x * width / world[1]];
+        last.geometry = [1.0, length * 0.5, radius, radius.min(0.75)];
+        Ok(())
+    }
+    fn debug_overlay<S: Stage>(
+        &mut self,
+        game: &Game<S>,
+        debug: DebugDraw,
+        world: [f32; 2],
+    ) -> Result<(), String> {
+        let pack = game.resources();
+        if debug.hitboxes {
+            for e in game.simulation().snapshots() {
+                let color = match e.handle.kind() {
+                    crate::EntityKind::Player => 0xff5266ff,
+                    crate::EntityKind::Enemy => 0xffd66daa,
+                    crate::EntityKind::Drop => 0x86edbcbb,
+                    crate::EntityKind::Projectile => {
+                        if game
+                            .simulation()
+                            .laser_phase(e.handle)
+                            .is_some_and(|p| p != crate::advanced::LaserPhase::Active)
+                        {
+                            0x8eaeff88
+                        } else {
+                            0xff5266bb
+                        }
+                    }
+                };
+                let origin = [e.position.x.to_f32(), e.position.y.to_f32()];
+                let radius = e.collider.radius().to_f32();
+                if e.collider.segments().len() == 0 {
+                    self.outline(pack, origin, origin, radius, color, world)?;
+                } else {
+                    for (a, b) in e.collider.segments() {
+                        self.outline(
+                            pack,
+                            [origin[0] + a.x.to_f32(), origin[1] + a.y.to_f32()],
+                            [origin[0] + b.x.to_f32(), origin[1] + b.y.to_f32()],
+                            radius,
+                            color,
+                            world,
+                        )?;
+                    }
+                }
+                if e.handle.kind() == crate::EntityKind::Player {
+                    self.outline(
+                        pack,
+                        origin,
+                        origin,
+                        game.simulation().config().player.graze_radius.to_f32(),
+                        0x79ffaa99,
+                        world,
+                    )?;
+                }
+            }
+        }
+        if let Some(p) = debug.performance {
+            self.sprite(
+                pack,
+                resources::SOLID,
+                [world[0] / 2.0, world[1] - 32.0],
+                [world[0] - 16.0, 64.0],
+                0x122438ee,
+                world,
+            )?;
+            let mut line = StackText::default();
+            write!(
+                &mut line,
+                "CPU SIM {:.2} DRAW {:.2} MS",
+                p.update_ms, p.draw_ms
+            )
+            .map_err(|e| e.to_string())?;
+            self.text(
+                pack,
+                line.as_bytes(),
+                [14.0, world[1] - 62.0],
+                1.2,
+                0xa3edffff,
+                world,
+            )?;
+            line.clear();
+            write!(
+                &mut line,
+                "P95 SIM {:.2} FRAME {:.2} N{}",
+                p.update_p95_ms, p.frame_p95_ms, p.samples
+            )
+            .map_err(|e| e.to_string())?;
+            self.text(
+                pack,
+                line.as_bytes(),
+                [14.0, world[1] - 43.0],
+                1.2,
+                0xffeab2ff,
+                world,
+            )?;
+            line.clear();
+            write!(
+                &mut line,
+                "TASKS {} SHOTS {} {}",
+                debug.tasks,
+                game.hud().projectiles,
+                if debug.paused { "PAUSED" } else { "RUNNING" }
+            )
+            .map_err(|e| e.to_string())?;
+            self.text(
+                pack,
+                line.as_bytes(),
+                [14.0, world[1] - 24.0],
+                1.2,
+                0xa3edffff,
+                world,
+            )?;
         }
         Ok(())
     }
@@ -501,13 +745,48 @@ impl GameRenderer {
         Ok(world)
     }
     pub fn draw<S: Stage>(&mut self, game: &Game<S>) -> Result<bool, String> {
+        self.draw_debug(game, DebugDraw::default())
+    }
+    pub fn draw_debug<S: Stage>(
+        &mut self,
+        game: &Game<S>,
+        debug: DebugDraw,
+    ) -> Result<bool, String> {
         if game.resources().content_hash() != self.resource_hash {
             return Err("resource pack changed; recreate the renderer".into());
         }
         if self.base.lost.load(Ordering::Relaxed) {
             return Err("GPU device lost; recreate renderer".into());
         }
+        let extra = if debug.hitboxes {
+            game.simulation()
+                .snapshots()
+                .map(|e| e.collider.segments().len().max(1))
+                .sum::<usize>()
+                + 2
+        } else {
+            0
+        };
+        let required = game.presentation_capacity() + extra;
+        if required > self.capacity {
+            let size = required
+                .checked_mul(std::mem::size_of::<SpriteInstance>())
+                .ok_or("debug draw capacity overflow")? as u64;
+            if size > self.base.device.limits().max_buffer_size {
+                return Err("debug draw exceeds GPU buffer limit".into());
+            }
+            self.buffer = self.base.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("debug sprite buffer"),
+                size,
+                usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                mapped_at_creation: false,
+            });
+            self.instances
+                .reserve(required.saturating_sub(self.instances.len()));
+            self.capacity = required;
+        }
         let world = self.compose(game)?;
+        self.debug_overlay(game, debug, world)?;
         let output = match self.base.surface.get_current_texture() {
             Ok(frame) => frame,
             Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {

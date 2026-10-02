@@ -15,10 +15,12 @@
 //! ```
 mod codec;
 mod compiler;
+mod debug;
 mod program;
 mod stage;
 mod vm;
 use crate::{EntityHandle, Fixed, Vec2};
+pub use debug::{FrameView, TaskState, TaskView};
 pub use program::Program;
 pub use stage::{ScriptStage, conformance_game, restore_fixture_hash, trace};
 pub use vm::{Vm, VmLimits};

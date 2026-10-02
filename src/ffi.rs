@@ -2,7 +2,9 @@
 use crate::{Bullet, Config, DrawSprite, Fixed, Input, Runtime};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 mod game;
+mod replay;
 pub use game::*;
+pub use replay::*;
 
 pub const ABI_VERSION: u32 = 1;
 pub const OK: i32 = 0;

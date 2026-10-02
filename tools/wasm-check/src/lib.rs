@@ -27,6 +27,14 @@ pub extern "C" fn run_simulation_trace(ticks: u32) -> *const u64 {
         trace.as_ptr()
     })
 }
+#[unsafe(no_mangle)]
+pub extern "C" fn run_game_trace(frames: u32) -> *const u64 {
+    TRACE.with(|trace| {
+        let mut trace = trace.borrow_mut();
+        *trace = grazer::game::trace(frames.min(100000));
+        trace.as_ptr()
+    })
+}
 
 #[unsafe(no_mangle)]
 pub extern "C" fn run_replay_check(ticks: u32) -> u64 {

@@ -32,7 +32,7 @@ const sleep = ms => new Promise(r => setTimeout(r, ms));
 try {
     await call('Page.enable');
     await call('Emulation.setDeviceMetricsOverride', {width: 1920, height: 1080, deviceScaleFactor: 1, mobile: false});
-    await call('Page.navigate', {url: `http://127.0.0.1:8080/?backend=${backend}&count=${count}`});
+    await call('Page.navigate', {url: `http://127.0.0.1:8080/motion.html?backend=${backend}&count=${count}`});
     for (let attempt = 0; ; attempt++) {
         const state = await evaluate('window.grazerValidation');
         if (state?.error) throw new Error(state.error);

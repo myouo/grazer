@@ -1,6 +1,8 @@
 //! C ABI v1. See the distributed `include/grazer.h` for layouts and ownership.
 use crate::{Bullet, Config, DrawSprite, Fixed, Input, Runtime};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+mod game;
+pub use game::*;
 
 pub const ABI_VERSION: u32 = 1;
 pub const OK: i32 = 0;

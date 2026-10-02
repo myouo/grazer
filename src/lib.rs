@@ -1,9 +1,9 @@
 //! Deterministic foundations for 2D bullet-hell games.
 //!
-//! [`Simulation`] implements the M1 headless core: generational entities, swept
-//! collisions, damage, grazing and versioned input/command replays. [`Runtime`]
-//! retains the protocol-1 M0 motion and presentation fixture. A scripting VM and
-//! playable game runner are later milestones.
+//! [`Game`] is the M2 playable SDK: native Rust stages, six controls, resources,
+//! sprite/HUD snapshots and audio events. [`Simulation`] implements the M1
+//! headless collision core. [`Runtime`] retains the protocol-1 M0 fixture.
+//! A dedicated scripting language and VM are later milestones.
 //! Rendering is optional; the default build has no dependencies.
 //!
 //! ```
@@ -16,6 +16,12 @@
 
 pub mod demo;
 mod fixed;
+pub mod game;
+pub use game::{
+    AudioEvent, Game, GameConfig, GameError, GameInput, GamePhase, GameSprite, Hud, Stage,
+    StageStatus,
+};
+pub mod resources;
 mod runtime;
 pub mod simulation;
 pub use fixed::Fixed;
@@ -26,6 +32,8 @@ pub use simulation::{
     SimulationConfig, SimulationError, Vec2,
 };
 
+#[cfg(all(feature = "desktop", not(target_arch = "wasm32")))]
+pub mod audio;
 #[cfg(feature = "ffi")]
 pub mod ffi;
 #[cfg(feature = "graphics")]

@@ -409,6 +409,27 @@ impl Simulation {
     pub fn enemy(&self, handle: EntityHandle) -> Option<&Enemy> {
         Some(&self.enemies.get(handle)?.spec)
     }
+    // M2 native game commands run inside a Game tick and are reproduced by its
+    // versioned GameInput trace. They do not extend the M1 replay command ABI.
+    pub(crate) fn clear_hostile_projectiles(&mut self) {
+        self.projectiles
+            .retain(|entry| entry.value.spec.faction != Faction::Enemy);
+    }
+    pub(crate) fn clear_enemies(&mut self) {
+        self.enemies.retain(|_| false);
+    }
+    pub(crate) fn protect_player(&mut self, ticks: u32) {
+        self.player.invulnerable_ticks = self.player.invulnerable_ticks.max(ticks);
+    }
+    pub(crate) fn damage_enemies(&mut self, amount: u32) {
+        for entry in self.enemies.entries_mut() {
+            let enemy = &mut entry.value;
+            enemy.spec.health = enemy.spec.health.saturating_sub(amount);
+            if enemy.spec.health == 0 {
+                enemy.remove = Some(DespawnReason::HealthDepleted);
+            }
+        }
+    }
     /// Player first, enemies in spawn order, then projectiles in spawn order.
     /// Hosts can reuse their own snapshot buffer with `clear` and `extend`.
     pub fn snapshots(&self) -> impl Iterator<Item = EntitySnapshot> + '_ {
@@ -463,22 +484,29 @@ impl Simulation {
 
     /// A rejected step leaves input, events, entities, RNG and tick unchanged.
     pub fn step_with_input(&mut self, input: Input) -> Result<(), SimulationError> {
+        self.step_with_speed(input, self.config.player.speed)
+    }
+    pub(crate) fn step_with_speed(
+        &mut self,
+        input: Input,
+        speed: Fixed,
+    ) -> Result<(), SimulationError> {
         validate_input(input)?;
         let next_tick = self.preflight()?;
         self.input = input;
         self.events.clear();
         self.contacts.clear();
-        self.move_entities();
+        self.move_entities(speed);
         self.gather_contacts();
         self.resolve_contacts();
         self.commit_removals();
         self.tick = next_tick;
         Ok(())
     }
-    fn move_entities(&mut self) {
+    fn move_entities(&mut self, player_speed: Fixed) {
         self.player.previous_position = self.player.position;
         if self.player.health > 0 {
-            let speed = i64::from(self.config.player.speed.bits());
+            let speed = i64::from(player_speed.bits());
             let x = i64::from(self.player.position.x.bits()) + i64::from(self.input.x) * speed;
             let y = i64::from(self.player.position.y.bits()) + i64::from(self.input.y) * speed;
             self.player.position = Vec2::new(
@@ -539,6 +567,9 @@ impl Simulation {
                     // pre-damage actor set, so simultaneous shots are consumed.
                     for enemy in self.enemies.entries() {
                         let e = &enemy.value;
+                        if e.spec.health == 0 {
+                            continue;
+                        }
                         if p.spec.collider.swept_contact(
                             p.previous,
                             p.spec.position,
@@ -560,6 +591,9 @@ impl Simulation {
         if self.player.health > 0 {
             for entry in self.enemies.entries() {
                 let e = &entry.value;
+                if e.spec.health == 0 {
+                    continue;
+                }
                 if e.spec.contact_damage > 0
                     && e.collider.swept_contact(
                         e.previous,

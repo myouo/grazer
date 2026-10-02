@@ -1,59 +1,94 @@
-import init, { WebDemo, conformance_trace } from './pkg/grazer.js';
-const status = document.querySelector('#status'), canvas = document.querySelector('#game');
+import init, { WebGame, game_conformance_trace } from './pkg/grazer.js';
+const canvas = document.querySelector('#game'), status = document.querySelector('#status');
 const query = new URLSearchParams(location.search), keys = new Set();
-let paused = false, last = null, accumulator = 0, audio;
-window.grazerValidation = { ready: false, frames: 0, audio: 'locked', error: null };
+let runtime, audio, sounds, last = null, paused = false, focused = true, bombPending = false;
+const voices = new Set();
+const state = window.grazerGameValidation = {ready:false,frames:0,audio:'locked',scheduledAudio:0,error:null};
+const backend = query.get('backend') ?? 'auto';
+document.querySelector('#backend').value = backend;
+document.querySelector('#backend').onchange = event => { query.set('backend',event.target.value); location.search = query.toString(); };
+function metrics() {
+    const h = runtime?.hud();
+    return {...state,paused,ticks:runtime?.tick().toString(),score:runtime?.score().toString(),health:h?.[0],bombs:h?.[1],phase:h?.[2],wave:h?.[3],bossHealth:h?.[4],bossMax:h?.[5],projectiles:h?.[6],enemies:h?.[7],bombFlash:h?.[8],hash:runtime?.state_hash(),resources:runtime?.resource_hash()};
+}
+function playSound(id) {
+    if (!audio || audio.state !== 'running' || voices.size >= 16) return;
+    const sound = sounds.get(id); if (!sound) throw new Error(`Missing sound ${id}`);
+    const oscillator = audio.createOscillator(), gain = audio.createGain(), now = audio.currentTime;
+    oscillator.type = ['square','triangle','sine'][sound.waveform]; oscillator.frequency.value = sound.frequency;
+    gain.gain.setValueAtTime(0,now); gain.gain.linearRampToValueAtTime(sound.gain_q8 / 256,now+0.005); gain.gain.linearRampToValueAtTime(0,now+sound.duration_ms/1000);
+    oscillator.connect(gain).connect(audio.destination); voices.add(oscillator);
+    oscillator.onended = () => { voices.delete(oscillator); oscillator.disconnect(); gain.disconnect(); };
+    oscillator.start(); oscillator.stop(now+sound.duration_ms/1000+0.01); state.scheduledAudio++;
+}
+function resetClock() {last = null; runtime?.reset_clock();}
+async function setPaused(value) {
+    paused = value; keys.clear(); bombPending = false; resetClock();
+    document.querySelector('#pause').textContent = value ? 'Resume' : 'Pause'; document.querySelector('#overlay').hidden = !value;
+    if (audio) { if (value) await audio.suspend(); else await audio.resume(); state.audio = audio.state; }
+}
+document.querySelector('#pause').onclick = () => setPaused(!paused).catch(fail);
+document.querySelector('#restart').onclick = () => { runtime.restart(); resetClock(); keys.clear(); bombPending=false; canvas.focus(); };
 document.querySelector('#audio').onclick = async () => {
-    try {
-        audio ??= new AudioContext(); await audio.resume();
-        const oscillator = audio.createOscillator(), gain = audio.createGain();
-        oscillator.frequency.value = 440;
-        gain.gain.setValueAtTime(0.08, audio.currentTime);
-        gain.gain.exponentialRampToValueAtTime(0.001, audio.currentTime + 0.15);
-        oscillator.connect(gain).connect(audio.destination);
-        oscillator.start(); oscillator.stop(audio.currentTime + 0.16);
-        window.grazerValidation.audio = audio.state;
-        document.querySelector('#audio').textContent = `Audio ${audio.state}`;
-    } catch (error) { status.textContent = `Audio failed: ${error}`; window.grazerValidation.audio = String(error); }
+    try { audio ??= new AudioContext(); await audio.resume(); state.audio = audio.state; playSound(1); document.querySelector('#audio').textContent = 'Sound enabled'; }
+    catch (error) { status.textContent = `Sound unavailable: ${error}`; state.audio = String(error); }
 };
-document.querySelector('#pause').onclick = (event) => {
-    paused = !paused; last = null; event.target.textContent = paused ? 'Resume' : 'Pause';
-};
-document.addEventListener('visibilitychange', () => { last = null; keys.clear(); });
-window.addEventListener('blur', () => keys.clear());
-window.addEventListener('keydown', (event) => { if (event.key.startsWith('Arrow')) { event.preventDefault(); keys.add(event.key); } });
-window.addEventListener('keyup', (event) => keys.delete(event.key));
-const samples = [], intervals = [], simTimes = [];
-const p95 = (values) => { if (!values.length) return null; const sorted = [...values].sort((a,b) => a-b); return sorted[Math.ceil(sorted.length * 0.95)-1]; };
+const gameKeys = new Set(['ArrowLeft','ArrowRight','ArrowUp','ArrowDown','KeyA','KeyD','KeyW','KeyS','KeyZ','Space','KeyX','ShiftLeft','ShiftRight','KeyR','Enter']);
+window.addEventListener('keydown', event => {
+    if (event.target.matches('select,input')) return;
+    if (event.code === 'KeyP' && !event.repeat) {event.preventDefault(); setPaused(!paused).catch(fail);}
+    if (gameKeys.has(event.code)) {event.preventDefault(); keys.add(event.code);}
+});
+window.addEventListener('keyup', event => keys.delete(event.code));
+window.addEventListener('blur', () => { focused=false; keys.clear(); bombPending=false; resetClock(); });
+window.addEventListener('focus', () => { focused=true; resetClock(); });
+document.addEventListener('visibilitychange', () => { keys.clear(); bombPending=false; resetClock(); if(document.hidden) {for(const voice of voices) voice.stop();} });
+canvas.addEventListener('pointerdown', () => canvas.focus());
+for (const button of document.querySelectorAll('[data-key]')) {
+    button.onpointerdown = event => {event.preventDefault(); button.setPointerCapture(event.pointerId); keys.add(button.dataset.key);};
+    button.onpointerup = button.onpointercancel = () => keys.delete(button.dataset.key);
+    button.onlostpointercapture = () => keys.delete(button.dataset.key);
+}
+document.querySelector('#touch-bomb').onclick = () => bombPending=true;
+function fail(error) {state.error=String(error);status.textContent=`Stage failed: ${error}`;}
+function updateStatus() {
+    const m=metrics(); status.textContent = m.phase===1 ? 'Ship lost. Press R or Restart for a new run.' : m.phase===2 ? 'Stage clear. Press R to fly again.' : `Wave ${m.wave || 1} · ${m.health} lives · ${m.bombs} bombs`;
+}
 try {
-    const count = Number(query.get('count') ?? 30000);
-    if (!Number.isInteger(count) || count < 0 || count > 1000000) throw new Error('count must be 0..1,000,000');
     await init();
-    const runtime = await WebDemo.create(canvas, count, query.get('backend') ?? 'auto');
-    const adapter = runtime.adapter();
-    Object.assign(window.grazerValidation, { ready: true, adapter, count, width: canvas.width, height: canvas.height });
-    window.grazerTrace = (ticks = 100000) => Array.from(conformance_trace(ticks), n => n.toString(16).padStart(16,'0'));
-    window.grazerMetrics = () => ({ ...window.grazerValidation, ticks: runtime.tick().toString(), cpuSubmitP95Ms: p95(samples), rafIntervalP95Ms: p95(intervals), simulationStepP95Ms: p95(simTimes), samples: samples.length, hash: runtime.state_hash(), userAgent: navigator.userAgent });
-    window.grazerSetPaused = (value) => { paused = value; last = null; };
-    window.grazerDrawForProbe = () => runtime.draw();
-    let measuredFrames = 0;
-    const frame = (now) => {
-        if (document.hidden || paused) { last = null; requestAnimationFrame(frame); return; }
-        const dt = last === null ? 0 : now-last; last = now; accumulator += dt;
-        const start = performance.now();
-        try {
-            for (let i=0; accumulator >= 1000/60 && i<8; i++) {
-                const simStart = performance.now();
-                runtime.step(Number(keys.has('ArrowRight'))-Number(keys.has('ArrowLeft')), Number(keys.has('ArrowDown'))-Number(keys.has('ArrowUp')));
-                if (measuredFrames > 120 && simTimes.length < 2000) simTimes.push(performance.now()-simStart);
-                accumulator -= 1000/60;
-            }
-            if (runtime.draw()) window.grazerValidation.frames++;
-            measuredFrames++;
-            if (measuredFrames > 120 && samples.length < 1200) { samples.push(performance.now()-start); intervals.push(dt); }
-            if (measuredFrames % 60 === 0) status.textContent = `${adapter}\n${count.toLocaleString()} bullets · tick ${runtime.tick()} · CPU submit p95 ${p95(samples)?.toFixed(2) ?? 'warming up'} ms`;
-            requestAnimationFrame(frame);
-        } catch (error) { status.textContent = `Runtime failed: ${error}`; window.grazerValidation.error = String(error); }
+    const project = new URL(query.get('project') ?? './assets/demo/project.json',location.href);
+    if (project.origin !== location.origin) throw new Error('Project assets must use this origin');
+    const response = await fetch(project); if (!response.ok) throw new Error(`Project load failed (${response.status})`);
+    const manifest = await response.text(), parsed = JSON.parse(manifest), atlasURL = new URL(parsed.atlas.file,project);
+    if(atlasURL.origin!==location.origin) throw new Error('Atlas must use this origin');
+    const atlasResponse = await fetch(atlasURL); if(!atlasResponse.ok) throw new Error(`Atlas load failed (${atlasResponse.status})`);
+    const health = Number(query.get('health') ?? 0); if(!Number.isInteger(health)||health<0||health>10000) throw new Error('health must be 0..10,000');
+    runtime = await WebGame.create(canvas,backend,manifest,new Uint8Array(await atlasResponse.arrayBuffer()),health);
+    sounds = new Map(parsed.sounds.map(sound => [sound.id,sound]));
+    Object.assign(state,{ready:true,adapter:runtime.adapter(),initialHash:runtime.state_hash(),width:canvas.width,height:canvas.height});
+    document.querySelector('#diagnostics').textContent = state.adapter;
+    for (const id of ['audio','pause','restart']) document.querySelector(`#${id}`).disabled=false;
+    window.grazerGameMetrics=metrics;
+    window.grazerGameTrace=(frames=100000)=>Array.from(game_conformance_trace(frames),n=>n.toString(16).padStart(16,'0'));
+    window.grazerSetPaused=setPaused; window.grazerDrawForProbe=()=>runtime.draw();
+    window.grazerGameAdvance=(steps,x=0,y=0,flags=1)=>{
+        if(!Number.isInteger(steps)||steps<0||steps>20000) throw new Error('steps must be 0..20,000');
+        for(let i=0;i<steps;i++) for(const id of runtime.step(x,y,flags)) playSound(id);
+        runtime.draw();updateStatus();return metrics();
     };
-    status.textContent = `${adapter}\n${count.toLocaleString()} bullets`; requestAnimationFrame(frame);
-} catch (error) { status.textContent = `Initialization failed: ${error}`; window.grazerValidation.error = String(error); }
+    window.grazerGameRestart=()=>{runtime.restart();resetClock();updateStatus();runtime.draw();return metrics();};
+    const frame = now => {
+        try {
+            const active=!document.hidden&&focused&&!paused, elapsed=last===null ? 0 : now-last; last=active ? now : null;
+            const due=runtime.ticks_due(elapsed,active);
+            for(let i=0;i<due;i++) {
+                const x=Number(keys.has('ArrowRight')||keys.has('KeyD'))-Number(keys.has('ArrowLeft')||keys.has('KeyA'));
+                const y=Number(keys.has('ArrowDown')||keys.has('KeyS'))-Number(keys.has('ArrowUp')||keys.has('KeyW'));
+                const flags=Number(keys.has('KeyZ')||keys.has('Space')||query.get('autoplay')==='1') | Number(keys.has('KeyX')||bombPending)<<1 | Number(keys.has('ShiftLeft')||keys.has('ShiftRight'))<<2 | Number(keys.has('KeyR')||keys.has('Enter'))<<3;
+                for(const id of runtime.step(x,y,flags)) playSound(id); bombPending=false;
+            }
+            if(runtime.draw()) state.frames++; if(state.frames%30===0) updateStatus(); requestAnimationFrame(frame);
+        } catch(error) {fail(error);}
+    };
+    updateStatus(); requestAnimationFrame(frame);
+} catch(error) {fail(error);}

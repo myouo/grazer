@@ -1,6 +1,8 @@
 //! Optional instanced-circle presentation shared by desktop and browser demos.
 //! This module never changes authoritative simulation state.
 use crate::Runtime;
+mod game;
+pub use game::GameRenderer;
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},

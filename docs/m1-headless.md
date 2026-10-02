@@ -4,7 +4,8 @@
 ticks/second when driven by a host. It never reads a clock or OS RNG, and the
 default crate has no third-party dependencies. `Runtime` and the existing
 C/desktop/browser examples continue to exercise the published M0 protocol 1.
-M2 will integrate gameplay with presentation, resources and host interfaces.
+M2 integrates gameplay with presentation, resources and host interfaces; see
+[the playable SDK](m2-playable.md).
 
 ## Entities and host boundaries
 

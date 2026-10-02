@@ -9,7 +9,8 @@ fn main() {
     let hashes = match std::env::args().nth(2).as_deref().unwrap_or("m0") {
         "m0" => grazer::demo::trace(ticks),
         "m1" => grazer::simulation::demo::trace(ticks),
-        _ => panic!("trace mode must be m0 or m1"),
+        "m2" => grazer::game::trace(ticks),
+        _ => panic!("trace mode must be m0, m1 or m2"),
     };
     for hash in hashes {
         writeln!(out, "{hash:016x}").unwrap();

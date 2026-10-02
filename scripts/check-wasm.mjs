@@ -4,6 +4,7 @@ const { instance } = await WebAssembly.instantiate(readFileSync('target/wasm32-u
 for (const [mode, path, run] of [
     ['M0', 'target/native-trace.txt', instance.exports.run_trace],
     ['M1', 'target/native-simulation-trace.txt', instance.exports.run_simulation_trace],
+    ['M2', 'target/native-game-trace.txt', instance.exports.run_game_trace],
 ]) {
     const hashes = readFileSync(path, 'utf8').trim().split('\n');
     assert.equal(hashes.length, 100000, `${mode} requires the full conformance trace`);

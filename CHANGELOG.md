@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased — M2
+
+- Add generic `Game<Stage>`, the Rust-native First Sortie stage (20 waves + Boss),
+  shooting, focus speed, Bomb damage/clear/protection, score/HUD and death/restart.
+- Add versioned JSON/RGBA/tone resources, a reproducible pixel-atlas exporter,
+  shared textured sprite/HUD renderer, desktop CPAL audio and browser audio events.
+- Add the `play` desktop runner and replace the web landing demo with the playable
+  stage; retain the M0 browser workload at `motion.html`.
+- Add game ABI v2 alongside ABI v1: shared sprite/HUD/audio/atlas metadata buffers
+  and a C host that compares every frame of the native Game trace.
+- Add protocol-3 native/WASM/browser conformance, full-stage and host-clock checks.
+
 ## Unreleased — M1
 
 - Add the dependency-free protocol-2 `Simulation` with generational projectile

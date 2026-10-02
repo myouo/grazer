@@ -48,6 +48,60 @@ int32_t grazer_step(GrazerRuntime *runtime);
  * Insufficient capacity never partially writes sprites. */
 int32_t grazer_snapshot(const GrazerRuntime *runtime, GrazerSprite *out, uint32_t capacity, uint32_t *required);
 int32_t grazer_state_hash(const GrazerRuntime *runtime, uint64_t *out);
+
+/* Additive M2 game ABI. Legacy functions above remain ABI v1.
+ * Same ownership/alignment/serial-call rules. Game protocol is independent
+ * from ABI and resource versions. Snapshots are presentation floats only.
+ * Native Stage errors stop the game; restart to reset. Audio snapshots contain
+ * events from the last successful step; hosts process them once after stepping.
+ */
+#define GRAZER_GAME_ABI_VERSION 2u
+typedef struct GrazerGame GrazerGame;
+typedef struct {
+    uint32_t abi_version, struct_size;
+    uint64_t seed;
+    uint32_t projectile_capacity, player_health; /* zero selects defaults */
+} GrazerGameConfig;
+typedef struct { int32_t x, y; uint32_t flags; } GrazerGameInput;
+enum { GRAZER_FIRE=1u, GRAZER_BOMB=2u, GRAZER_FOCUS=4u, GRAZER_RESTART=8u };
+enum { GRAZER_PLAYING=0u, GRAZER_GAME_OVER=1u, GRAZER_CLEARED=2u, GRAZER_FAULTED=3u };
+typedef struct {
+    uint32_t kind, slot, generation, resource_id;
+    float x, y, width, height;
+    uint32_t rgba, layer;
+} GrazerGameSprite;
+typedef struct { uint32_t resource_id, sequence; uint64_t tick; } GrazerAudioEvent;
+typedef struct {
+    uint64_t tick, score, grazes;
+    uint32_t health, bombs, phase, wave, boss_health, boss_max_health;
+    uint32_t projectiles, enemies, bomb_flash;
+} GrazerHud;
+typedef struct {
+    uint32_t version, width, height, atlas_bytes, sprites, sounds;
+    uint64_t content_hash;
+} GrazerResourceInfo;
+typedef struct { uint32_t id, x, y, width, height; } GrazerSpriteAsset;
+typedef struct { uint32_t id, waveform, frequency, duration_ms, gain_q8; } GrazerSoundAsset;
+uint32_t grazer_game_abi_version(void);
+int32_t grazer_game_create(const GrazerGameConfig *config, GrazerGame **out);
+void grazer_game_destroy(GrazerGame *game);
+/* Unknown flags/axes are rejected without changes. Restart uses a rising edge. */
+int32_t grazer_game_step(GrazerGame *game, GrazerGameInput input);
+int32_t grazer_game_restart(GrazerGame *game);
+int32_t grazer_game_state_hash(const GrazerGame *game, uint64_t *out);
+int32_t grazer_game_hud(const GrazerGame *game, GrazerHud *out);
+/* Bulk queries: required is always written for a valid handle/buffer contract;
+ * capacity < required returns BUFFER_TOO_SMALL without partial output writes.
+ * Empty output queries return OK with required=0. Kind: player=0/enemy=1/shot=2.
+ * Generations belong to the current run; restarting invalidates previous run
+ * handles conceptually. Display layer order is ascending, player layer 30.
+ */
+int32_t grazer_game_snapshot(const GrazerGame *game, GrazerGameSprite *out, uint32_t capacity, uint32_t *required);
+int32_t grazer_game_audio(const GrazerGame *game, GrazerAudioEvent *out, uint32_t capacity, uint32_t *required);
+int32_t grazer_game_resource_info(const GrazerGame *game, GrazerResourceInfo *out);
+int32_t grazer_game_atlas(const GrazerGame *game, uint8_t *out, uint32_t capacity, uint32_t *required);
+int32_t grazer_game_sprite_assets(const GrazerGame *game, GrazerSpriteAsset *out, uint32_t capacity, uint32_t *required);
+int32_t grazer_game_sound_assets(const GrazerGame *game, GrazerSoundAsset *out, uint32_t capacity, uint32_t *required);
 #ifdef __cplusplus
 }
 #endif

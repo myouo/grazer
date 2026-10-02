@@ -1,0 +1,161 @@
+// Prism Passage: seven minutes of waves, then three one-minute Boss phases.
+// Fixed-point turns: 0 right, 0.25 down. Difficulty: 0 Easy, 1 Normal, 2 Hard.
+task main() {
+    fork waves();
+    wait(25200);
+    cancel_children();
+    clear_enemies();
+    cancel_shots(true);
+    let number = 1;
+    while number <= 3 {
+        fork encounter(number);
+        wait(3600);
+        cancel_children();
+        clear_enemies();
+        cancel_shots(true);
+        number = number + 1;
+    }
+    complete();
+}
+
+task waves() {
+    let number = 1;
+    while number <= 70 {
+        wave(number);
+        let column = 1;
+        while column <= 5 {
+            let ship = make_ship(column, number);
+            fork wave_pattern(ship, number % 6);
+            column = column + 2;
+        }
+        number = number + 1;
+        wait(360);
+    }
+}
+
+fn make_ship(column: int, number: int) -> entity {
+    let ship = enemy(vec(width() * fixed(column) / 6.0, 24.0), vec(0.0, 1.0),
+        12.0, 24, 440, 0xffaaa0ff);
+    enemy_drop(ship, 0, 100);
+    if column == 3 {
+        if number % 6 == 2 { enemy_drop(ship, 1, 1); }
+        if number % 6 == 4 { enemy_drop(ship, 2, 1); }
+    }
+    compose(ship, vec(0.0, 0.001), 0.0);
+    return ship;
+}
+
+task wave_pattern(ship: entity, style: int) {
+    attach(ship);
+    while alive(ship) {
+        if style == 0 { ring_volley(position(ship), 0.0); }
+        if style == 1 { fan_volley(position(ship)); }
+        if style == 2 { aimed_volley(position(ship)); }
+        if style == 3 { spiral_volley(position(ship), fixed(tick() % 60) / 60.0); }
+        if style == 4 { moving_shot(position(ship)); }
+        if style == 5 { aimed_volley(position(ship)); }
+        wait(120 - difficulty() * 20);
+    }
+}
+
+fn ring_volley(p: vec, angle: fixed) {
+    ring(p, 12 + difficulty() * 4, 1.2 + fixed(difficulty()) * 0.25,
+        angle, 3.0, 420);
+}
+fn fan_volley(p: vec) {
+    fan(p, 5 + difficulty() * 2, 2.0 + fixed(difficulty()) * 0.25,
+        0.25, 0.20, 3.0, 420);
+}
+fn aimed_volley(p: vec) {
+    aimed(p, player(), 3 + difficulty() * 2, 2.3 + fixed(difficulty()) * 0.25,
+        0.08, 3.0, 420);
+}
+fn spiral_volley(p: vec, angle: fixed) {
+    spiral(p, 4 + difficulty(), 1.5 + fixed(difficulty()) * 0.25,
+        angle, 0.20, 3.0, 420);
+}
+fn moving_shot(p: vec) {
+    let shot = emit(p, polar(1.0, 0.25), 4.0, 1, 300);
+    compose(shot, vec(0.0, 0.008), 0.0005);
+    colour(shot, 0x95f2caff);
+}
+
+task encounter(number: int) {
+    let hp = 4500 + difficulty() * 1500;
+    let ship = enemy(vec(width() / 2.0, 96.0), vec(0.0, 0.0),
+        24.0, hp, 0, 0xe99fffff);
+    boss(ship, hp);
+    wave(70 + number);
+    phase(ship, number, 3600);
+    enemy_drop(ship, 0, 1000);
+    if number == 1 { fork prism_ring(ship); fork prism_aim(ship); }
+    if number == 2 { fork prism_spiral(ship); fork prism_straight(ship); }
+    if number == 3 { fork prism_curve(ship); fork prism_motion(ship); }
+    while alive(ship) { wait(1); }
+    cancel_shots(true);
+    drop(vec(width() / 2.0, 120.0), 2, 1);
+}
+
+task prism_ring(ship: entity) {
+    attach(ship);
+    let angle = 0.0;
+    while alive(ship) {
+        ring_volley(position(ship), angle);
+        fan_volley(position(ship));
+        angle = angle + 0.035;
+        wait(90);
+    }
+}
+task prism_aim(ship: entity) {
+    attach(ship);
+    wait(35);
+    while alive(ship) { aimed_volley(position(ship)); wait(100); }
+}
+task prism_spiral(ship: entity) {
+    attach(ship);
+    let angle = 0.0;
+    while alive(ship) {
+        spiral_volley(position(ship), angle);
+        angle = angle + 0.015;
+        wait(18 - difficulty() * 3);
+    }
+}
+task prism_straight(ship: entity) {
+    attach(ship);
+    let side = 0;
+    while alive(ship) {
+        straight_beam(side);
+        side = 1 - side;
+        wait(300);
+    }
+}
+fn straight_beam(side: int) {
+    let p = vec(80.0 + fixed(side) * 320.0, 64.0);
+    let beam = laser(p, vec(90.0 - fixed(side) * 180.0, 540.0), 5.0,
+        90, 120, 30);
+    colour(beam, 0x65dfffff);
+}
+task prism_curve(ship: entity) {
+    attach(ship);
+    let side = 0;
+    while alive(ship) {
+        curve_beam(side);
+        side = 1 - side;
+        aimed_volley(position(ship));
+        wait(300);
+    }
+}
+fn curve_beam(side: int) {
+    let p = vec(70.0 + fixed(side) * 340.0, 72.0);
+    let sign = 1.0 - fixed(side) * 2.0;
+    curve_laser(p, vec(270.0 * sign, 240.0), vec(40.0 * sign, 520.0),
+        5.0, 90, 150, 30);
+}
+task prism_motion(ship: entity) {
+    attach(ship);
+    while alive(ship) {
+        moving_shot(position(ship));
+        fan_volley(position(ship));
+        wait(75);
+    }
+}

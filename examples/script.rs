@@ -38,9 +38,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let mut config = GameConfig::default();
     config.simulation.player.health = 10000;
-    config.simulation.projectile_capacity = 512;
+    config.simulation.projectile_capacity = 1024;
     let mut game = Game::with_stage(config, 42, ResourcePack::builtin(), stage)?;
-    for _ in 0..12000 {
+    for _ in 0..40000 {
         game.step(GameInput {
             fire: true,
             ..GameInput::default()

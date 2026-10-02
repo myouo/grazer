@@ -1,0 +1,8 @@
+task main() {
+    while true {
+        let shot = emit(vec(width() / 2.0, 100.0), polar(1.0, 0.25), 4.0, 1, 300);
+        compose(shot, vec(0.0, 0.01), 0.0005);
+        colour(shot, 0x95f2caff);
+        wait(45);
+    }
+}

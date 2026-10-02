@@ -41,6 +41,25 @@ unsafe impl GlobalAlloc for CountingAllocator {
 static ALLOCATOR: CountingAllocator = CountingAllocator;
 
 #[test]
+fn advanced_stage_motion_lasers_death_drops_and_snapshots_reuse_buffers() {
+    let mut game = grazer::game::showcase::conformance_game().clone();
+    ALLOCATIONS.set(0);
+    TRACK.set(true);
+    for frame in 0..36002 {
+        game.step(grazer::game::showcase::input(frame)).unwrap();
+        for sprite in game.sprites() {
+            std::hint::black_box(sprite);
+        }
+        for segment in game.laser_segments() {
+            std::hint::black_box(segment);
+        }
+        std::hint::black_box(game.advanced_hud());
+    }
+    TRACK.set(false);
+    assert_eq!(ALLOCATIONS.get(), 0);
+}
+
+#[test]
 fn vm_forks_calls_waits_and_owner_cancellation_reuse_buffers() {
     let mut game = grazer::language::conformance_game().clone();
     ALLOCATIONS.set(0);

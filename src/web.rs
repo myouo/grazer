@@ -99,7 +99,7 @@ impl WebGame {
             manifest,
             atlas,
             health,
-            include_str!("../assets/demo/first_sortie.graze").into(),
+            include_str!("../assets/demo/advanced_showcase.graze").into(),
         )
         .await
     }
@@ -110,6 +110,17 @@ impl WebGame {
         atlas: Vec<u8>,
         health: u32,
         source: String,
+    ) -> Result<WebGame, JsValue> {
+        Self::create_with_difficulty(canvas, backend, manifest, atlas, health, source, 1).await
+    }
+    pub async fn create_with_difficulty(
+        canvas: web_sys::HtmlCanvasElement,
+        backend: String,
+        manifest: String,
+        atlas: Vec<u8>,
+        health: u32,
+        source: String,
+        difficulty: u32,
     ) -> Result<WebGame, JsValue> {
         console_error_panic_hook::set_once();
         let backends = match backend.as_str() {
@@ -131,8 +142,23 @@ impl WebGame {
             42,
         )
         .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let game = crate::game::Game::with_stage(config, 42, pack, stage)
-            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let difficulty = crate::advanced::Difficulty::from_u32(difficulty)
+            .ok_or_else(|| JsValue::from_str("difficulty must be 0, 1 or 2"))?;
+        let game = if stage.vm().program().uses_advanced() {
+            crate::game::Game::with_advanced_stage(
+                config,
+                42,
+                pack,
+                stage,
+                crate::advanced::AdvancedConfig {
+                    difficulty,
+                    ..crate::advanced::AdvancedConfig::default()
+                },
+            )
+        } else {
+            crate::game::Game::with_stage(config, 42, pack, stage)
+        }
+        .map_err(|e| JsValue::from_str(&e.to_string()))?;
         let descriptor = wgpu::InstanceDescriptor {
             backends,
             ..Default::default()
@@ -147,13 +173,12 @@ impl WebGame {
         let surface = instance
             .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        let cfg = game.simulation().config();
         let renderer = crate::graphics::GameRenderer::new(
             &instance,
             surface,
             width,
             height,
-            cfg.projectile_capacity as usize + cfg.enemy_capacity as usize + 1024,
+            game.presentation_capacity(),
             game.resources(),
         )
         .await
@@ -200,6 +225,41 @@ impl WebGame {
             h.enemies,
             h.bomb_flash,
         ]
+    }
+    pub fn advanced_hud(&self) -> Vec<u64> {
+        self.game.advanced_hud().map_or_else(Vec::new, |h| {
+            vec![
+                u64::from(h.difficulty),
+                u64::from(h.power),
+                u64::from(h.drops),
+                u64::from(h.boss_phase),
+                u64::from(h.phase_ticks),
+                u64::from(h.phases_started),
+                h.collected,
+                h.cancelled,
+                h.phase_bonus,
+            ]
+        })
+    }
+    /// Bulk beam geometry, ten numeric fields per segment, matching the C POD.
+    pub fn laser_segments(&self) -> Vec<f64> {
+        self.game
+            .laser_segments()
+            .flat_map(|s| {
+                [
+                    f64::from(s.slot),
+                    f64::from(s.generation),
+                    f64::from(s.segment),
+                    f64::from(s.phase),
+                    f64::from(s.x1),
+                    f64::from(s.y1),
+                    f64::from(s.x2),
+                    f64::from(s.y2),
+                    f64::from(s.width),
+                    f64::from(s.rgba),
+                ]
+            })
+            .collect()
     }
     pub fn step(&mut self, x: i32, y: i32, flags: u32) -> Result<Vec<u32>, JsValue> {
         let input = crate::game::GameInput::from_flags(x, y, flags)
@@ -255,4 +315,11 @@ pub fn script_conformance_trace(frames: u32) -> Result<Vec<u64>, JsValue> {
         return Err(JsValue::from_str("maximum 100,000 frames"));
     }
     Ok(crate::language::trace(frames))
+}
+#[wasm_bindgen]
+pub fn advanced_conformance_trace(frames: u32) -> Result<Vec<u64>, JsValue> {
+    if frames > 100000 {
+        return Err(JsValue::from_str("maximum 100,000 frames"));
+    }
+    Ok(crate::game::showcase::trace(frames))
 }

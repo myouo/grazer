@@ -31,6 +31,14 @@ impl ScriptStage {
             seed,
         )
     }
+    pub fn showcase(seed: u64) -> Result<Self, Diagnostic> {
+        Self::compile(
+            "advanced_showcase.graze",
+            include_str!("../../assets/demo/advanced_showcase.graze"),
+            VmLimits::default(),
+            seed,
+        )
+    }
     pub fn vm(&self) -> &Vm {
         &self.vm
     }
@@ -58,6 +66,12 @@ impl Stage for ScriptStage {
     }
     fn after_step(&mut self, world: &Simulation) {
         self.vm.prune_dead_owners(world);
+    }
+    fn advanced_config(&self) -> Option<crate::advanced::AdvancedConfig> {
+        self.vm
+            .program()
+            .uses_advanced()
+            .then(crate::advanced::AdvancedConfig::default)
     }
 }
 pub fn conformance_game() -> Game<ScriptStage> {

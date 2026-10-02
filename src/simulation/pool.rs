@@ -92,6 +92,9 @@ impl<T> Pool<T> {
     pub fn len(&self) -> usize {
         self.dense.len()
     }
+    pub fn available(&self) -> usize {
+        self.free.len()
+    }
     pub fn remove(&mut self, handle: EntityHandle) -> Result<(), SimulationError> {
         if self.index(handle).is_none() {
             return Err(SimulationError::InvalidHandle);

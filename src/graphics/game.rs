@@ -8,7 +8,8 @@ use std::{fmt::Write, sync::atomic::Ordering};
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 struct SpriteInstance {
     center: [f32; 2],
-    size: [f32; 2],
+    horizontal: [f32; 2],
+    vertical: [f32; 2],
     uv_origin: [f32; 2],
     uv_size: [f32; 2],
     color: [f32; 4],
@@ -127,7 +128,7 @@ impl GameRenderer {
             bind_group_layouts: &[&layout],
             push_constant_ranges: &[],
         });
-        let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Float32x2,3=>Float32x2,4=>Float32x4];
+        let attributes = wgpu::vertex_attr_array![0=>Float32x2,1=>Float32x2,2=>Float32x2,3=>Float32x2,4=>Float32x2,5=>Float32x4];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("sprite atlas pipeline"),
             layout: Some(&pipeline_layout),
@@ -199,7 +200,8 @@ impl GameRenderer {
                 position[0] / world[0] * 2.0 - 1.0,
                 1.0 - position[1] / world[1] * 2.0,
             ],
-            size: [size[0] / world[0], size[1] / world[1]],
+            horizontal: [size[0] / world[0], 0.0],
+            vertical: [0.0, -size[1] / world[1]],
             uv_origin: [
                 s.x as f32 / pack.width() as f32,
                 s.y as f32 / pack.height() as f32,
@@ -215,6 +217,68 @@ impl GameRenderer {
                 (rgba & 255) as f32 / 255.0,
             ],
         });
+        Ok(())
+    }
+    fn beam(
+        &mut self,
+        pack: &ResourcePack,
+        segment: crate::advanced::LaserSegment,
+        world: [f32; 2],
+    ) -> Result<(), String> {
+        let dx = segment.x2 - segment.x1;
+        let dy = segment.y2 - segment.y1;
+        let length = dx.hypot(dy).max(0.001);
+        let width = match segment.phase {
+            0 => 1.5,
+            1 => segment.width,
+            _ => segment.width * 0.4,
+        };
+        let rgba = (segment.rgba & !255)
+            | match segment.phase {
+                0 => 100,
+                1 => 230,
+                _ => 55,
+            };
+        let center = [
+            (segment.x1 + segment.x2) * 0.5,
+            (segment.y1 + segment.y2) * 0.5 + 64.0,
+        ];
+        self.sprite(pack, resources::SOLID, center, [length, width], rgba, world)?;
+        let last = self.instances.last_mut().expect("beam quad");
+        last.horizontal = [dx / world[0], -dy / world[1]];
+        last.vertical = [
+            -dy / length * width / world[0],
+            -dx / length * width / world[1],
+        ];
+        for point in [
+            [segment.x1, segment.y1 + 64.0],
+            [segment.x2, segment.y2 + 64.0],
+        ] {
+            self.sprite(
+                pack,
+                resources::ENEMY_SHOT,
+                point,
+                [width * 1.8, width * 1.8],
+                rgba,
+                world,
+            )?;
+        }
+        if segment.phase == 1 {
+            self.sprite(
+                pack,
+                resources::SOLID,
+                center,
+                [length, width * 0.3],
+                0xeeffffff,
+                world,
+            )?;
+            let last = self.instances.last_mut().expect("beam core");
+            last.horizontal = [dx / world[0], -dy / world[1]];
+            last.vertical = [
+                -dy / length * width * 0.3 / world[0],
+                -dx / length * width * 0.3 / world[1],
+            ];
+        }
         Ok(())
     }
     fn text(
@@ -263,7 +327,12 @@ impl GameRenderer {
                 world,
             )?;
         }
-        for layer in [10, 20, 30] {
+        for layer in [10, 15, 20, 25, 30] {
+            if layer == 15 {
+                for beam in game.laser_segments() {
+                    self.beam(pack, beam, world)?;
+                }
+            }
             for s in game.sprites().filter(|s| s.layer == layer) {
                 self.sprite(
                     pack,
@@ -349,6 +418,34 @@ impl GameRenderer {
             0x90b7d4ff,
             world,
         )?;
+        if let Some(advanced) = game.advanced_hud() {
+            line.clear();
+            let difficulty = match advanced.difficulty {
+                0 => "EASY",
+                1 => "NORMAL",
+                _ => "HARD",
+            };
+            write!(&mut line, "{}  POWER {}", difficulty, advanced.power)
+                .map_err(|e| e.to_string())?;
+            if advanced.boss_phase > 0 {
+                write!(
+                    &mut line,
+                    "  PHASE {}  {:02}.{:01}",
+                    advanced.boss_phase,
+                    advanced.phase_ticks / 60,
+                    (advanced.phase_ticks % 60) / 6
+                )
+                .map_err(|e| e.to_string())?;
+            }
+            self.text(
+                pack,
+                line.as_bytes(),
+                [14.0, world[1] - 62.0],
+                1.4,
+                0xffdd91ff,
+                world,
+            )?;
+        }
         self.text(
             pack,
             b"SHIFT FOCUS   P PAUSE   R RESTART",

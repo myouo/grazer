@@ -44,6 +44,14 @@ pub extern "C" fn run_script_trace(frames: u32) -> *const u64 {
     })
 }
 #[unsafe(no_mangle)]
+pub extern "C" fn run_advanced_trace(frames: u32) -> *const u64 {
+    TRACE.with(|trace| {
+        let mut trace = trace.borrow_mut();
+        *trace = grazer::game::showcase::trace(frames.min(100000));
+        trace.as_ptr()
+    })
+}
+#[unsafe(no_mangle)]
 pub extern "C" fn run_vm_restore_check(ticks: u32) -> u64 {
     grazer::language::restore_fixture_hash(ticks)
 }

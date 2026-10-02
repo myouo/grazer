@@ -9,7 +9,7 @@ ws.onmessage=({data})=>{const message=JSON.parse(data);if(!message.id)return;con
 function call(method,params={}){const id=++next;return new Promise((resolve,reject)=>{pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}));});}
 async function evaluate(expression){const result=await call('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true});if(result.exceptionDetails)throw new Error(JSON.stringify(result.exceptionDetails));return result.result.value;}
 const sleep=ms=>new Promise(r=>setTimeout(r,ms));
-async function ready(health=0){await call('Page.navigate',{url:`http://127.0.0.1:8080/?backend=${backend}&health=${health}`});for(let i=0;i<180;i++){const state=await evaluate('window.grazerGameValidation');if(state?.error)throw new Error(state.error);if(state?.ready&&state.frames>=3)return;if(i%30===0)console.log(`${backend}: waiting for stage resources/rendering`);await sleep(250);}throw new Error('stage initialization timeout');}
+async function ready(health=0){await call('Page.navigate',{url:`http://127.0.0.1:8080/?backend=${backend}&health=${health}&script=./first_sortie.graze`});for(let i=0;i<180;i++){const state=await evaluate('window.grazerGameValidation');if(state?.error)throw new Error(state.error);if(state?.ready&&state.frames>=3)return;if(i%30===0)console.log(`${backend}: waiting for stage resources/rendering`);await sleep(250);}throw new Error('stage initialization timeout');}
 async function screenshot(name){const shot=await call('Page.captureScreenshot',{format:'png'});writeFileSync(`target/m2-${backend}-${name}.png`,Buffer.from(shot.data,'base64'));}
 try {
     await call('Page.enable');await call('Emulation.setDeviceMetricsOverride',{width:1280,height:1100,deviceScaleFactor:1,mobile:false});

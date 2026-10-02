@@ -1,5 +1,6 @@
 //! M1 headless simulation, protocol 2. The protocol-1 `Runtime` remains the M0
 //! motion/presentation fixture. This core owns no clock, OS RNG or renderer.
+//! Enable [`advanced`] before spawning to use the M4 protocol-4 extension.
 //!
 //! ```
 //! use grazer::{SimulationConfig, Input};
@@ -15,6 +16,7 @@
 //! # Ok::<(), grazer::simulation::ReplayError>(())
 //! ```
 
+pub mod advanced;
 pub mod demo;
 mod geometry;
 mod pool;
@@ -26,6 +28,7 @@ pub use replay::{
 };
 
 use crate::{Fixed, Input};
+use advanced::{AdvancedState, DropKind, DropReward, LaserPhase, LiveDrop, LiveLaser, Motion};
 use pool::Pool;
 
 pub const SIMULATION_PROTOCOL_VERSION: u32 = 2;
@@ -62,6 +65,7 @@ pub enum EntityKind {
     Player = 0,
     Enemy = 1,
     Projectile = 2,
+    Drop = 3,
 }
 
 /// Value handle, scoped to its simulation (and clones of that simulation).
@@ -78,6 +82,7 @@ impl EntityHandle {
             0 if slot == 0 && generation == 1 => EntityKind::Player,
             1 => EntityKind::Enemy,
             2 => EntityKind::Projectile,
+            3 => EntityKind::Drop,
             _ => return None,
         };
         if generation == 0 || slot >= MAX_ENTITY_CAPACITY {
@@ -246,6 +251,11 @@ pub enum DespawnReason {
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Event {
+    Collected {
+        entity: EntityHandle,
+        kind: DropKind,
+        value: u32,
+    },
     /// Actual damage, possibly zero due to invulnerability or a simultaneous kill.
     Hit {
         source: EntityHandle,
@@ -279,6 +289,8 @@ struct LiveProjectile {
     remaining: u32,
     grazed: bool,
     remove: Option<DespawnReason>,
+    motion: Option<Motion>,
+    laser: Option<LiveLaser>,
 }
 #[derive(Clone)]
 struct LiveEnemy {
@@ -287,6 +299,8 @@ struct LiveEnemy {
     previous: Vec2,
     remaining: u32,
     remove: Option<DespawnReason>,
+    motion: Option<Motion>,
+    drop: Option<DropReward>,
 }
 #[derive(Clone, Copy)]
 enum Contact {
@@ -313,6 +327,7 @@ pub struct Simulation {
     enemies: Pool<LiveEnemy>,
     contacts: Vec<Contact>,
     events: Vec<Event>,
+    advanced: Option<Box<AdvancedState>>,
 }
 impl Clone for Simulation {
     fn clone(&self) -> Self {
@@ -331,6 +346,7 @@ impl Clone for Simulation {
             enemies: self.enemies.clone(),
             contacts,
             events,
+            advanced: self.advanced.clone(),
         }
     }
 }
@@ -356,10 +372,18 @@ impl Simulation {
             enemies: Pool::new(EntityKind::Enemy, config.enemy_capacity),
             contacts: Vec::with_capacity(working_capacity),
             events: Vec::with_capacity(working_capacity * 2 + 1),
+            advanced: None,
         })
     }
     pub fn config(&self) -> SimulationConfig {
         self.config
+    }
+    pub fn protocol_version(&self) -> u32 {
+        if self.advanced.is_some() {
+            advanced::ADVANCED_PROTOCOL_VERSION
+        } else {
+            SIMULATION_PROTOCOL_VERSION
+        }
     }
     pub fn tick(&self) -> u64 {
         self.tick
@@ -399,6 +423,8 @@ impl Simulation {
             spec,
             grazed: false,
             remove: None,
+            motion: None,
+            laser: None,
         })
     }
     pub fn spawn_enemy(&mut self, spec: Enemy) -> Result<EntityHandle, SimulationError> {
@@ -410,12 +436,20 @@ impl Simulation {
             spec,
             collider,
             remove: None,
+            motion: None,
+            drop: None,
         })
     }
     pub fn despawn(&mut self, handle: EntityHandle) -> Result<(), SimulationError> {
         match handle.kind {
             EntityKind::Projectile => self.projectiles.remove(handle),
             EntityKind::Enemy => self.enemies.remove(handle),
+            EntityKind::Drop => self
+                .advanced
+                .as_mut()
+                .ok_or(SimulationError::InvalidHandle)?
+                .drops
+                .remove(handle),
             EntityKind::Player => Err(SimulationError::InvalidHandle),
         }
     }
@@ -445,7 +479,7 @@ impl Simulation {
                     .spec
                     .velocity = velocity
             }
-            EntityKind::Player => return Err(SimulationError::InvalidHandle),
+            EntityKind::Player | EntityKind::Drop => return Err(SimulationError::InvalidHandle),
         }
         Ok(())
     }
@@ -497,6 +531,27 @@ impl Simulation {
             health: None,
             rgba: e.value.spec.rgba,
         }))
+        .chain(self.drops().map(|e| {
+            EntitySnapshot {
+                handle: e.handle,
+                position: e.position,
+                previous_position: self
+                    .advanced
+                    .as_ref()
+                    .expect("drop storage")
+                    .drops
+                    .get(e.handle)
+                    .expect("live drop")
+                    .previous,
+                collider: Collider::circle(Fixed::from_bits(6 << 16)).expect("drop radius"),
+                health: None,
+                rgba: match e.reward.kind {
+                    DropKind::Point => 0xffde78ff,
+                    DropKind::Power => 0xff92aaff,
+                    DropKind::Bomb => 0xb9adffff,
+                },
+            }
+        }))
     }
     fn preflight(&self) -> Result<u64, SimulationError> {
         let next = self.tick.checked_add(1).ok_or(SimulationError::Exhausted)?;
@@ -507,6 +562,9 @@ impl Simulation {
                 .position
                 .checked_add(entry.value.spec.velocity)
                 .ok_or(SimulationError::ArithmeticOverflow)?;
+            if let Some(motion) = entry.value.motion {
+                motion.next_velocity(entry.value.spec.velocity)?;
+            }
         }
         for entry in self.enemies.entries() {
             entry
@@ -515,6 +573,33 @@ impl Simulation {
                 .position
                 .checked_add(entry.value.spec.velocity)
                 .ok_or(SimulationError::ArithmeticOverflow)?;
+            if let Some(motion) = entry.value.motion {
+                motion.next_velocity(entry.value.spec.velocity)?;
+            }
+        }
+        if let Some(state) = &self.advanced {
+            // Reserve a death drop for every tagged enemy before mutation.
+            if state.drops.available()
+                < self
+                    .enemies
+                    .entries()
+                    .iter()
+                    .filter(|e| e.value.drop.is_some())
+                    .count()
+            {
+                return Err(SimulationError::Capacity);
+            }
+            for entry in state.drops.entries() {
+                entry
+                    .value
+                    .position
+                    .checked_add(drop_velocity(
+                        entry.value.position,
+                        self.player.position,
+                        self.config.height,
+                    ))
+                    .ok_or(SimulationError::ArithmeticOverflow)?;
+            }
         }
         Ok(next)
     }
@@ -537,6 +622,7 @@ impl Simulation {
         self.events.clear();
         self.contacts.clear();
         self.move_entities(speed);
+        self.move_drops();
         self.gather_contacts();
         self.resolve_contacts();
         self.commit_removals();
@@ -562,6 +648,11 @@ impl Simulation {
                 .position
                 .checked_add(e.spec.velocity)
                 .expect("preflight motion");
+            if let Some(motion) = e.motion {
+                e.spec.velocity = motion
+                    .next_velocity(e.spec.velocity)
+                    .expect("preflight velocity");
+            }
         }
         for entry in self.enemies.entries_mut() {
             let e = &mut entry.value;
@@ -571,11 +662,39 @@ impl Simulation {
                 .position
                 .checked_add(e.spec.velocity)
                 .expect("preflight motion");
+            if let Some(motion) = e.motion {
+                e.spec.velocity = motion
+                    .next_velocity(e.spec.velocity)
+                    .expect("preflight velocity");
+            }
+        }
+    }
+    fn move_drops(&mut self) {
+        if let Some(state) = &mut self.advanced {
+            for entry in state.drops.entries_mut() {
+                let drop = &mut entry.value;
+                drop.previous = drop.position;
+                // Attraction samples the player at the previous tick boundary.
+                drop.position = drop
+                    .position
+                    .checked_add(drop_velocity(
+                        drop.position,
+                        self.player.previous_position,
+                        self.config.height,
+                    ))
+                    .expect("preflight drop motion");
+                drop.age += 1;
+            }
         }
     }
     fn gather_contacts(&mut self) {
         for entry in self.projectiles.entries() {
             let p = &entry.value;
+            if p.laser
+                .is_some_and(|laser| laser.phase() != LaserPhase::Active)
+            {
+                continue;
+            }
             match p.spec.faction {
                 Faction::Enemy if self.player.health > 0 => {
                     if p.spec.collider.swept_contact(
@@ -660,7 +779,9 @@ impl Simulation {
                         .projectiles
                         .get_mut(projectile)
                         .expect("live contact source");
-                    p.remove = Some(DespawnReason::Hit);
+                    if p.laser.is_none() {
+                        p.remove = Some(DespawnReason::Hit);
+                    }
                     let damage = p.spec.damage;
                     if target == EntityHandle::PLAYER {
                         self.hit_player(projectile, damage, &mut protected);
@@ -717,6 +838,9 @@ impl Simulation {
     fn commit_removals(&mut self) {
         for entry in self.projectiles.entries_mut() {
             let p = &mut entry.value;
+            if let Some(laser) = &mut p.laser {
+                laser.age += 1;
+            }
             expire(&mut p.remaining, p.spec.lifetime, &mut p.remove);
             if p.remove.is_none()
                 && p.spec.bounds == BoundsBehavior::Despawn
@@ -748,7 +872,65 @@ impl Simulation {
                     entity: entry.handle,
                     reason,
                 });
+                if reason == DespawnReason::HealthDepleted
+                    && let Some(reward) = e.drop
+                {
+                    let position = Vec2::new(
+                        Fixed::from_bits(
+                            e.spec
+                                .position
+                                .x
+                                .bits()
+                                .clamp(0, self.config.width.bits() - 1),
+                        ),
+                        Fixed::from_bits(
+                            e.spec
+                                .position
+                                .y
+                                .bits()
+                                .clamp(0, self.config.height.bits() - 1),
+                        ),
+                    );
+                    self.advanced
+                        .as_mut()
+                        .expect("tagged enemy requires advanced mode")
+                        .drops
+                        .insert(LiveDrop {
+                            position,
+                            previous: position,
+                            reward,
+                            age: 0,
+                            remove: false,
+                        })
+                        .expect("preflight death-drop capacity");
+                }
             }
+        }
+        if let Some(state) = &mut self.advanced {
+            let collider = Collider::circle(Fixed::from_bits(6 << 16)).expect("drop radius");
+            for entry in state.drops.entries_mut() {
+                let drop = &mut entry.value;
+                if self.player.health > 0
+                    && collider.swept_contact(
+                        drop.previous,
+                        drop.position,
+                        self.player.previous_position,
+                        self.player.position,
+                        Fixed::from_bits(14 << 16),
+                    )
+                {
+                    drop.remove = true;
+                    state.collected = state.collected.saturating_add(1);
+                    self.events.push(Event::Collected {
+                        entity: entry.handle,
+                        kind: drop.reward.kind,
+                        value: drop.reward.value,
+                    });
+                } else if drop.age >= 600 || !self.config.contains(drop.position) {
+                    drop.remove = true;
+                }
+            }
+            state.drops.retain(|entry| !entry.value.remove);
         }
         self.projectiles.retain(|e| e.value.remove.is_none());
         self.enemies.retain(|e| e.value.remove.is_none());
@@ -759,7 +941,7 @@ impl Simulation {
     /// Events/contacts and cached geometry are derived and excluded.
     pub fn state_hash(&self) -> u64 {
         let mut hash = StateHasher::new();
-        hash.u32(SIMULATION_PROTOCOL_VERSION);
+        hash.u32(self.protocol_version());
         hash.config(self.config);
         hash.u64(self.tick);
         hash.u64(self.rng);
@@ -784,7 +966,49 @@ impl Simulation {
             hash.vector(e.value.previous);
             hash.u32(e.value.remaining);
         }
+        if let Some(state) = &self.advanced {
+            state.hash(&mut hash);
+            for e in self.projectiles.entries() {
+                hash.motion(e.value.motion);
+                hash.u8(u8::from(e.value.laser.is_some()));
+                if let Some(laser) = e.value.laser {
+                    for n in [
+                        laser.timing.warmup,
+                        laser.timing.active,
+                        laser.timing.fade,
+                        laser.age,
+                    ] {
+                        hash.u32(n);
+                    }
+                }
+            }
+            for e in self.enemies.entries() {
+                hash.motion(e.value.motion);
+                hash.u8(u8::from(e.value.drop.is_some()));
+                if let Some(drop) = e.value.drop {
+                    hash.u32(drop.kind as u32);
+                    hash.u32(drop.value);
+                }
+            }
+        }
         hash.finish()
+    }
+}
+fn drop_velocity(position: Vec2, player: Vec2, height: Fixed) -> Vec2 {
+    let dx = i64::from(player.x.bits()) - i64::from(position.x.bits());
+    let dy = i64::from(player.y.bits()) - i64::from(position.y.bits());
+    let reach = 64i64 << 16;
+    if player.y.bits() < height.bits() / 4
+        || i128::from(dx) * i128::from(dx) + i128::from(dy) * i128::from(dy)
+            < i128::from(reach) * i128::from(reach)
+    {
+        let scale = dx.abs().max(dy.abs()).max(1);
+        Vec2::new(
+            Fixed::from_bits((dx * (8 << 16) / scale) as i32),
+            Fixed::from_bits((dy * (8 << 16) / scale) as i32),
+        )
+    } else {
+        Vec2::new(Fixed::ZERO, Fixed::from_bits(3 << 15))
     }
 }
 fn expire(remaining: &mut u32, lifetime: u32, reason: &mut Option<DespawnReason>) {
@@ -804,6 +1028,13 @@ pub(crate) fn validate_input(input: Input) -> Result<(), SimulationError> {
 
 pub(crate) struct StateHasher(u64);
 impl StateHasher {
+    fn motion(&mut self, motion: Option<Motion>) {
+        self.u8(u8::from(motion.is_some()));
+        if let Some(motion) = motion {
+            self.vector(motion.acceleration);
+            self.fixed(motion.turn_per_tick);
+        }
+    }
     fn new() -> Self {
         Self(0xcbf29ce484222325)
     }

@@ -25,6 +25,7 @@ jobs:
       - run: cargo build --release --features ffi --locked
       - run: cargo run --release --example trace --locked -- 100000 m2 > target/native-game-trace.txt
       - run: cargo run --release --example trace --locked -- 100000 m3 > target/native-script-trace.txt
+      - run: cargo run --release --example trace --locked -- 100000 m4 > target/native-advanced-trace.txt
       - run: cargo run --release --example script --locked -- restore-check > target/native-vm-restore.txt
       - name: C host (Unix)
         if: runner.os != 'Windows'
@@ -35,6 +36,7 @@ jobs:
           cc -std=c11 -Wall -Wextra -Werror -Iinclude examples/c_game.c -Ltarget/release -lgrazer -Wl,-rpath,"$PWD/target/release" -o target/c_game
           target/c_game target/native-game-trace.txt
           target/c_game target/native-script-trace.txt script
+          target/c_game target/native-advanced-trace.txt advanced
       - name: C host (Windows)
         if: runner.os == 'Windows'
         shell: bash
@@ -45,6 +47,7 @@ jobs:
           gcc -std=c11 -Wall -Wextra -Werror -Iinclude examples/c_game.c target/release/grazer.dll -o target/c_game.exe
           target/c_game.exe target/native-game-trace.txt
           target/c_game.exe target/native-script-trace.txt script
+          target/c_game.exe target/native-advanced-trace.txt advanced
       - run: cargo package --locked
   wasm:
     runs-on: ubuntu-latest
@@ -62,6 +65,7 @@ jobs:
       - run: cargo run --release --example trace --locked -- 100000 m1 > target/native-simulation-trace.txt
       - run: cargo run --release --example trace --locked -- 100000 m2 > target/native-game-trace.txt
       - run: cargo run --release --example trace --locked -- 100000 m3 > target/native-script-trace.txt
+      - run: cargo run --release --example trace --locked -- 100000 m4 > target/native-advanced-trace.txt
       - run: cargo run --release --example script --locked -- restore-check > target/native-vm-restore.txt
       - run: node scripts/check-wasm.mjs
       - run: node scripts/benchmark-wasm.mjs 128 10

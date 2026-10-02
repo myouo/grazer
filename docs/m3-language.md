@@ -86,7 +86,8 @@ implicit int/fixed conversion; use `fixed(int)` and `int(fixed)` explicitly.
 World/entity commands validate bounds, positive collider/health and capacities.
 Enemy lifetime zero means Keep/unlimited (the Boss); positive lifetime uses normal
 culling. Hostile emission uses the demo bullet resource/color, and player shots
-remain Game controls. The advanced pattern/resource/laser API is M4 work.
+remain Game controls. [M4](m4-advanced.md) adds pattern/motion/laser/drop/phase
+builtins without changing the original builtin IDs or First Sortie fingerprint.
 
 Functions run synchronously on a bounded call stack; tasks can fork only tasks
 and functions can call only functions. Functions cannot wait/fork/control tasks.

@@ -456,16 +456,22 @@ impl Vm {
                     Op::Builtin {
                         dst, builtin, args, ..
                     } => {
-                        if builtin.command() {
-                            if budget.commands == self.limits.commands_per_tick {
+                        let args = self.arguments(index, args);
+                        let cost = builtin.command_cost(&args);
+                        if cost > 0 {
+                            if cost
+                                > self
+                                    .limits
+                                    .commands_per_tick
+                                    .saturating_sub(budget.commands)
+                            {
                                 return Err((
                                     DiagnosticKind::CommandBudget,
                                     "host command budget exhausted",
                                 ));
                             }
-                            budget.commands += 1;
+                            budget.commands += cost;
                         }
-                        let args = self.arguments(index, args);
                         let (value, control) = self.builtin(index, builtin, args, world)?;
                         self.store(index, dst, value);
                         match control {
@@ -663,6 +669,7 @@ impl Vm {
                     }
                     EntityKind::Enemy => world.enemy(h).map(|e| e.position),
                     EntityKind::Projectile => world.projectile(h).map(|p| p.position),
+                    EntityKind::Drop => world.drop_snapshot(h).map(|p| p.position),
                     _ => None,
                 };
                 Value::Vec(position.ok_or(entity_error)?)
@@ -747,12 +754,169 @@ impl Vm {
                 slot: index as u32,
                 generation: self.slots[index].generation,
             })),
+            Builtin::Polar => {
+                Value::Vec(crate::advanced::polar(fixed(0)?, fixed(1)?).map_err(host)?)
+            }
+            Builtin::Ring | Builtin::Fan | Builtin::Aimed | Builtin::Spiral => {
+                use crate::advanced::{Pattern, PatternShot};
+                let (count, speed, radius, lifetime, pattern) = match builtin {
+                    Builtin::Ring => (
+                        int(1)?,
+                        fixed(2)?,
+                        fixed(4)?,
+                        int(5)?,
+                        Pattern::Ring { angle: fixed(3)? },
+                    ),
+                    Builtin::Fan => (
+                        int(1)?,
+                        fixed(2)?,
+                        fixed(5)?,
+                        int(6)?,
+                        Pattern::Fan {
+                            angle: fixed(3)?,
+                            spread: fixed(4)?,
+                        },
+                    ),
+                    Builtin::Aimed => (
+                        int(2)?,
+                        fixed(3)?,
+                        fixed(5)?,
+                        int(6)?,
+                        Pattern::Aimed {
+                            target: vector(1)?,
+                            spread: fixed(4)?,
+                        },
+                    ),
+                    _ => (
+                        int(1)?,
+                        fixed(2)?,
+                        fixed(5)?,
+                        int(6)?,
+                        Pattern::Spiral {
+                            angle: fixed(3)?,
+                            step: fixed(4)?,
+                        },
+                    ),
+                };
+                if count <= 0 || lifetime < 0 {
+                    return Err(bad);
+                }
+                world
+                    .emit_pattern(
+                        pattern,
+                        PatternShot {
+                            origin: vector(0)?,
+                            count: count as u32,
+                            speed,
+                            radius,
+                            lifetime: lifetime as u32,
+                            rgba: match builtin {
+                                Builtin::Ring => 0xf5a2d9ff,
+                                Builtin::Fan => 0xffbd76ff,
+                                Builtin::Aimed => 0xff8297ff,
+                                _ => 0xb0a4ffff,
+                            },
+                        },
+                    )
+                    .map_err(host)?;
+                Value::Unit
+            }
+            Builtin::Compose => {
+                world
+                    .compose_motion(
+                        entity(0)?,
+                        crate::advanced::Motion {
+                            acceleration: vector(1)?,
+                            turn_per_tick: fixed(2)?,
+                        },
+                    )
+                    .map_err(host)?;
+                Value::Unit
+            }
+            Builtin::Laser | Builtin::CurveLaser => {
+                use crate::advanced::{LaserTiming, bezier_collider};
+                let shift = usize::from(builtin == Builtin::CurveLaser);
+                let warmup = int(3 + shift)?;
+                let active = int(4 + shift)?;
+                let fade = int(5 + shift)?;
+                if warmup < 0 || active <= 0 || fade < 0 {
+                    return Err(bad);
+                }
+                let collider = if shift == 0 {
+                    Collider::capsule(Vec2::ZERO, vector(1)?, fixed(2)?).map_err(|_| bad)?
+                } else {
+                    bezier_collider(vector(1)?, vector(2)?, fixed(3)?).map_err(host)?
+                };
+                Value::Entity(Some(
+                    world
+                        .spawn_laser(
+                            vector(0)?,
+                            Vec2::ZERO,
+                            collider,
+                            LaserTiming {
+                                warmup: warmup as u32,
+                                active: active as u32,
+                                fade: fade as u32,
+                            },
+                            if shift == 0 { 0x65dfffff } else { 0xb4a0ffff },
+                        )
+                        .map_err(host)?,
+                ))
+            }
+            Builtin::Drop | Builtin::EnemyDrop => {
+                use crate::advanced::{DropKind, DropReward};
+                let kind = DropKind::from_u32(int(1)? as u32).ok_or(bad)?;
+                let value = int(2)?;
+                if value <= 0 {
+                    return Err(bad);
+                }
+                let reward = DropReward {
+                    kind,
+                    value: value as u32,
+                };
+                if builtin == Builtin::Drop {
+                    Value::Entity(Some(world.drop_item(vector(0)?, reward).map_err(host)?))
+                } else {
+                    world.enemy_drop(entity(0)?, reward).map_err(host)?;
+                    Value::Unit
+                }
+            }
+            Builtin::Difficulty => Value::Int(world.difficulty().ok_or(bad)? as i32),
+            Builtin::Phase => {
+                let phase = int(1)?;
+                let duration = int(2)?;
+                if phase <= 0 || duration <= 0 {
+                    return Err(bad);
+                }
+                world
+                    .begin_boss_phase(entity(0)?, phase as u32, duration as u32)
+                    .map_err(host)?;
+                Value::Unit
+            }
+            Builtin::Despawn => {
+                world.despawn(entity(0)?).map_err(host)?;
+                Value::Unit
+            }
+            Builtin::CancelShots => {
+                let Value::Bool(reward) = args[0] else {
+                    return Err(bad);
+                };
+                Value::Int(world.cancel_shots(reward).map_err(host)? as i32)
+            }
+            Builtin::Colour => {
+                world.colour(entity(0)?, int(1)? as u32).map_err(host)?;
+                Value::Unit
+            }
         };
         Ok((value, Control::Continue))
     }
     pub fn state_hash(&self) -> u64 {
         let mut hash = Fingerprint::new();
-        hash.u32(VM_PROTOCOL_VERSION);
+        hash.u32(if self.program.uses_advanced() {
+            VM_PROTOCOL_VERSION
+        } else {
+            1
+        });
         hash.u64(self.program.content_hash());
         for v in [
             self.limits.tasks,
@@ -924,6 +1088,7 @@ fn entity_alive(world: &Simulation, h: EntityHandle) -> bool {
         EntityKind::Player => world.player().health > 0,
         EntityKind::Enemy => world.enemy(h).is_some_and(|e| e.health > 0),
         EntityKind::Projectile => world.projectile(h).is_some(),
+        EntityKind::Drop => world.drop_snapshot(h).is_some(),
     }
 }
 pub(crate) fn hash_value(hash: &mut Fingerprint, value: Value) {

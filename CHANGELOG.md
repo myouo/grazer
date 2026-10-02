@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased — M4
+
+- Add dependency-free integer turn/polar/rotation helpers and atomic ring, fan,
+  aimed and spiral volleys; pattern emissions charge each bullet to VM budgets.
+- Add composed velocity/acceleration/turning with checked preflight, persistent
+  straight/polyline lasers with harmless warning/fade and swept active collision.
+- Add bounded generational drops with reserved death rewards, attraction/pickup,
+  point/power/Bomb rewards, difficulty scaling, cancel score and Boss phase bonus.
+- Require explicit stage completion in the opt-in protocol-4 extension, allowing
+  multi-phase Boss death/timeout/owner-task cleanup. Preserve M0–M3 fixtures.
+- Add Prism Passage (70 waves + three Boss phases, about ten minutes), nine
+  creation examples, difficulty controls and shared rotated beam/drop/HUD display.
+- Add M4 C constructors/HUD/beam buffers and Web bindings. New programs use
+  bytecode/VM protocol 2; legacy programs keep version 1 and their fingerprints.
+- Add native/C/actual-WASM/WebGL2/WebGPU conformance, complete-stage continuation,
+  allocation checks, native Vulkan/audio evidence and packaging/CI coverage.
+
 ## Unreleased — M3
 
 - Add typed `.graze` source: int/bool/Q16.16/vector/entity/task values, variables,

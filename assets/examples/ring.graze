@@ -1,0 +1,8 @@
+task main() {
+    let angle = 0.0;
+    while true {
+        ring(vec(width() / 2.0, 100.0), 16, 1.5, angle, 3.0, 420);
+        angle = angle + 0.025;
+        wait(90);
+    }
+}

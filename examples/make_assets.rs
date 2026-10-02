@@ -6,6 +6,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     std::fs::create_dir_all(&path)?;
     std::fs::write(
+        path.join("advanced_showcase.graze"),
+        include_str!("../assets/demo/advanced_showcase.graze"),
+    )?;
+    let examples = path.join("examples");
+    std::fs::create_dir_all(&examples)?;
+    for (name, source) in [
+        ("ring", include_str!("../assets/examples/ring.graze")),
+        ("fan", include_str!("../assets/examples/fan.graze")),
+        ("aimed", include_str!("../assets/examples/aimed.graze")),
+        ("spiral", include_str!("../assets/examples/spiral.graze")),
+        ("motion", include_str!("../assets/examples/motion.graze")),
+        (
+            "straight_laser",
+            include_str!("../assets/examples/straight_laser.graze"),
+        ),
+        (
+            "curve_laser",
+            include_str!("../assets/examples/curve_laser.graze"),
+        ),
+        (
+            "boss_phases",
+            include_str!("../assets/examples/boss_phases.graze"),
+        ),
+        (
+            "drops_score",
+            include_str!("../assets/examples/drops_score.graze"),
+        ),
+    ] {
+        std::fs::write(examples.join(format!("{name}.graze")), source)?;
+    }
+    std::fs::write(
         path.join("project.json"),
         grazer::resources::ResourcePack::builtin_manifest(),
     )?;

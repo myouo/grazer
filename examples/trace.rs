@@ -11,7 +11,8 @@ fn main() {
         "m1" => grazer::simulation::demo::trace(ticks),
         "m2" => grazer::game::trace(ticks),
         "m3" => grazer::language::trace(ticks),
-        _ => panic!("trace mode must be m0, m1, m2 or m3"),
+        "m4" => grazer::game::showcase::trace(ticks),
+        _ => panic!("trace mode must be m0, m1, m2, m3 or m4"),
     };
     for hash in hashes {
         writeln!(out, "{hash:016x}").unwrap();

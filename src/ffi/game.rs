@@ -1,7 +1,7 @@
 //! Additive game ABI v2; legacy motion ABI v1 entrypoints remain intact.
 use super::{BUFFER_TOO_SMALL, INVALID_ARGUMENT, OK, RUNTIME_ERROR, VERSION_MISMATCH, guard};
 use crate::{
-    game::{AudioEvent, DemoStage, Game, GameConfig, GameInput, GameSprite, Hud},
+    game::{AdvancedHud, AudioEvent, DemoStage, Game, GameConfig, GameInput, GameSprite, Hud},
     resources::{RESOURCE_VERSION, ResourcePack, SoundAsset, SpriteAsset},
 };
 pub const GAME_ABI_VERSION: u32 = 2;
@@ -59,6 +59,12 @@ impl HostedGame {
         match self {
             Self::Native(game) => game.hud(),
             Self::Script(game) => game.hud(),
+        }
+    }
+    fn advanced_hud(&self) -> Option<AdvancedHud> {
+        match self {
+            Self::Native(game) => game.advanced_hud(),
+            Self::Script(game) => game.advanced_hud(),
         }
     }
     fn audio_events(&self) -> &[AudioEvent] {
@@ -453,6 +459,53 @@ pub unsafe extern "C" fn grazer_game_create_script(
     out: *mut *mut GrazerGame,
     diagnostic: *mut GrazerScriptDiagnostic,
 ) -> i32 {
+    // SAFETY: forwards the documented source and output buffer contract.
+    unsafe { create_script(config, source, length, format, out, diagnostic, None) }
+}
+/// # Safety
+/// Same buffer contract as create_script. Null/zero source selects the M4
+/// showcase; difficulty is 0 Easy, 1 Normal or 2 Hard.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn grazer_game_create_advanced(
+    config: *const GrazerGameConfig,
+    source: *const u8,
+    length: u32,
+    format: u32,
+    difficulty: u32,
+    out: *mut *mut GrazerGame,
+    diagnostic: *mut GrazerScriptDiagnostic,
+) -> i32 {
+    let Some(difficulty) = crate::advanced::Difficulty::from_u32(difficulty) else {
+        if !out.is_null() {
+            // SAFETY: caller provides writable output storage by contract.
+            unsafe {
+                *out = std::ptr::null_mut();
+            }
+        }
+        return INVALID_ARGUMENT;
+    };
+    // SAFETY: forwards the documented source and output buffer contract.
+    unsafe {
+        create_script(
+            config,
+            source,
+            length,
+            format,
+            out,
+            diagnostic,
+            Some(difficulty),
+        )
+    }
+}
+unsafe fn create_script(
+    config: *const GrazerGameConfig,
+    source: *const u8,
+    length: u32,
+    format: u32,
+    out: *mut *mut GrazerGame,
+    diagnostic: *mut GrazerScriptDiagnostic,
+    difficulty: Option<crate::advanced::Difficulty>,
+) -> i32 {
     guard(|| {
         if out.is_null() {
             return INVALID_ARGUMENT;
@@ -494,7 +547,11 @@ pub unsafe extern "C" fn grazer_game_create_script(
                 )
             })
         } else if bytes.is_empty() {
-            crate::language::ScriptStage::builtin(config.seed)
+            if difficulty.is_some() {
+                crate::language::ScriptStage::showcase(config.seed)
+            } else {
+                crate::language::ScriptStage::builtin(config.seed)
+            }
         } else {
             match std::str::from_utf8(bytes) {
                 Ok(source) => crate::language::ScriptStage::compile(
@@ -525,7 +582,21 @@ pub unsafe extern "C" fn grazer_game_create_script(
         if config.player_health > 0 {
             cfg.simulation.player.health = config.player_health;
         }
-        match Game::with_stage(cfg, config.seed, ResourcePack::builtin(), stage) {
+        let game = if let Some(difficulty) = difficulty {
+            Game::with_advanced_stage(
+                cfg,
+                config.seed,
+                ResourcePack::builtin(),
+                stage,
+                crate::advanced::AdvancedConfig {
+                    difficulty,
+                    ..crate::advanced::AdvancedConfig::default()
+                },
+            )
+        } else {
+            Game::with_stage(cfg, config.seed, ResourcePack::builtin(), stage)
+        };
+        match game {
             Ok(game) => {
                 // SAFETY: out is writable pointer storage; caller owns the Box handle.
                 unsafe {
@@ -536,6 +607,75 @@ pub unsafe extern "C" fn grazer_game_create_script(
                 OK
             }
             Err(_) => INVALID_ARGUMENT,
+        }
+    })
+}
+#[unsafe(no_mangle)]
+pub extern "C" fn grazer_advanced_api_version() -> u32 {
+    1
+}
+/// # Safety
+/// Handle readable, output aligned/writable and nonoverlapping. Legacy games
+/// return INVALID_ARGUMENT; they continue to expose the original HUD.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn grazer_game_advanced_hud(
+    game: *const GrazerGame,
+    out: *mut AdvancedHud,
+) -> i32 {
+    guard(|| {
+        if out.is_null() {
+            return INVALID_ARGUMENT;
+        }
+        // SAFETY: caller supplies a readable live handle or null.
+        let Some(game) = (unsafe { game.as_ref() }) else {
+            return INVALID_ARGUMENT;
+        };
+        let Some(hud) = game.inner.advanced_hud() else {
+            return INVALID_ARGUMENT;
+        };
+        // SAFETY: caller provides aligned writable output storage.
+        unsafe {
+            out.write(hud);
+        }
+        OK
+    })
+}
+/// # Safety
+/// Same count/query, alignment, nonaliasing and serialization contract as
+/// grazer_game_snapshot. Laser segments are separate from sprite snapshots.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn grazer_game_lasers(
+    game: *const GrazerGame,
+    out: *mut crate::advanced::LaserSegment,
+    capacity: u32,
+    required: *mut u32,
+) -> i32 {
+    guard(|| {
+        // SAFETY: caller supplies a readable live handle or null.
+        let Some(game) = (unsafe { game.as_ref() }) else {
+            return INVALID_ARGUMENT;
+        };
+        match &game.inner {
+            // SAFETY: copy receives the documented nonoverlapping output buffers.
+            HostedGame::Native(game) => unsafe {
+                copy(
+                    game.laser_segments(),
+                    game.laser_segments().count(),
+                    out,
+                    capacity,
+                    required,
+                )
+            },
+            // SAFETY: copy receives the documented nonoverlapping output buffers.
+            HostedGame::Script(game) => unsafe {
+                copy(
+                    game.laser_segments(),
+                    game.laser_segments().count(),
+                    out,
+                    capacity,
+                    required,
+                )
+            },
         }
     })
 }

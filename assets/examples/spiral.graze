@@ -1,0 +1,8 @@
+task main() {
+    let angle = 0.0;
+    while true {
+        spiral(vec(width() / 2.0, 160.0), 5, 1.5, angle, 0.2, 3.0, 420);
+        angle = angle + 0.02;
+        wait(15);
+    }
+}

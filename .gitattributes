@@ -1,0 +1,2 @@
+# Program fingerprints bind source bytes, including line endings.
+*.graze text eol=lf

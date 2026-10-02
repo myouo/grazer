@@ -23,6 +23,11 @@ pub trait Stage: Clone {
         None
     }
     fn after_step(&mut self, _: &Simulation) {}
+    /// Allocate the M4 pools at construction and require explicit completion
+    /// rather than ending the game immediately on a Boss death.
+    fn advanced_config(&self) -> Option<crate::advanced::AdvancedConfig> {
+        None
+    }
 }
 #[derive(Clone, Default)]
 pub struct DemoStage {

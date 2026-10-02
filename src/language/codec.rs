@@ -338,7 +338,7 @@ fn read_instruction(input: &mut Reader<'_>) -> Result<Instruction, Diagnostic> {
 }
 pub(crate) fn program_body(program: &Program) -> Vec<u8> {
     let mut out = Writer(Vec::new());
-    out.u32(BYTECODE_VERSION);
+    out.u32(program.bytecode_version());
     out.text(&program.source);
     out.u16(program.entry);
     out.u16(program.functions.len() as u16);
@@ -380,7 +380,8 @@ pub(crate) fn read_program(bytes: &[u8]) -> Result<Program, Diagnostic> {
         return Err(input.error("invalid bytecode magic"));
     }
     let file = input.text(4096)?;
-    if input.u32()? != BYTECODE_VERSION {
+    let version = input.u32()?;
+    if version != 1 && version != BYTECODE_VERSION {
         return Err(input.error("unsupported bytecode version"));
     }
     let source = input.text(MAX_SOURCE_BYTES)?;
@@ -434,6 +435,9 @@ pub(crate) fn read_program(bytes: &[u8]) -> Result<Program, Diagnostic> {
         return Err(input.error("trailing bytecode bytes"));
     }
     let program = Program::checked(file, source, entry, functions)?;
+    if version != program.bytecode_version() {
+        return Err(input.error("bytecode version does not match its builtin set"));
+    }
     if program.content_hash() != expected {
         return Err(input.error("bytecode fingerprint mismatch"));
     }
@@ -442,7 +446,11 @@ pub(crate) fn read_program(bytes: &[u8]) -> Result<Program, Diagnostic> {
 pub(crate) fn write_vm(vm: &Vm) -> Vec<u8> {
     let mut out = Writer(b"GZVMST01".to_vec());
     out.u32(VM_STATE_VERSION);
-    out.u32(VM_PROTOCOL_VERSION);
+    out.u32(if vm.program.uses_advanced() {
+        VM_PROTOCOL_VERSION
+    } else {
+        1
+    });
     out.u64(vm.program.content_hash());
     for v in [
         vm.limits.tasks,
@@ -519,7 +527,12 @@ pub(crate) fn read_vm(program: std::sync::Arc<Program>, bytes: &[u8]) -> Result<
     let mut input = Reader::new(bytes, DiagnosticKind::Snapshot);
     if input.take(8)? != b"GZVMST01"
         || input.u32()? != VM_STATE_VERSION
-        || input.u32()? != VM_PROTOCOL_VERSION
+        || input.u32()?
+            != if program.uses_advanced() {
+                VM_PROTOCOL_VERSION
+            } else {
+                1
+            }
     {
         return Err(input.error("unsupported VM snapshot"));
     }

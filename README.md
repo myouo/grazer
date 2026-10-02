@@ -2,42 +2,49 @@
 
 Deterministic Rust 2D bullet-hell (STG) runtime.
 
-**M3 / experimental, repository sources:** a typed stage/bullet language with
-verified bytecode, concurrent cooperative tasks, deterministic budgets, source
-diagnostics and VM save/restore. The playable stage and Boss now run from
-`assets/demo/first_sortie.graze` through the same Rust stage SDK with
-desktop/WebGPU/WebGL2 runners, textured sprites and HUD, versioned atlas/tone
-resources, audio events, shooting/focus/Bomb, enemy waves, Boss and death/restart.
-The shared headless core retains fixed 60Hz, checked Q16.16, generational pools,
-swept collision, grazing and input/command replay. Advanced STG tools, saved
-gameplay replay/debug tools, stable SDK/ABI and editor are later milestones.
+**M4 / experimental, repository sources:** deterministic ring/fan/aimed/spiral
+patterns, composed acceleration/turning, telegraphed straight/curve lasers,
+multi-phase Bosses, bullet cancellation, point/power/Bomb drops, scoring and
+three difficulties. Desktop/WebGPU/WebGL2 default to the ten-minute scripted
+Prism Passage: 70 waves and three Boss phases. Nine focused scripts under
+`assets/examples` demonstrate each ability. The typed language retains verified
+bytecode, cooperative tasks, budgets, source diagnostics and VM save/restore.
+The shared headless core uses fixed 60Hz, checked Q16.16, generational pools,
+swept collision, grazing and input/command replay. Full saved gameplay replay/
+debug tools, stable SDK/ABI and editor are later milestones.
 Public APIs may change before 0.1.0. The published `0.1.0-alpha.1` crate contains
-M0; these M1/M2/M3 additions have not been published.
+M0; these M1/M2/M3/M4 additions have not been published.
 
 ```rust
-use grazer::{Game, GameInput};
-let mut game = Game::new(42).unwrap();
+use grazer::{GameInput, advanced::Difficulty, game::showcase};
+let mut game = showcase::game(Difficulty::Normal, 0).unwrap();
 game.step(GameInput { fire: true, ..GameInput::default() }).unwrap();
 let hud = game.hud(); // caller owns time and advances exactly one tick
 for sprite in game.sprites() { /* render with game.resources() */ }
+for beam in game.laser_segments() { /* render capsule/polyline segments */ }
 for sound in game.audio_events() { /* play resource ID once after each step */ }
 ```
 
 The default library has no third-party dependencies. Enable `ffi` for the native
 C ABI, `desktop` for the windowed example, or `web` for browser bindings.
 The `graphics` feature provides the shared wgpu presentation backend.
-`Game` is protocol 3 over the protocol-2 `Simulation`. Legacy `Runtime`, C ABI
+M4 `Game`/`Simulation` use protocol 4; opt-out worlds retain protocols 3/2.
+`Game::new` and `ScriptStage::builtin` retain the First Sortie references.
+Legacy `Runtime`, C ABI
 v1 and the `desktop`/`motion.html` demonstrations retain M0. The additive
 `grazer_game_*` ABI v2 consumes the same Game snapshots, HUD, audio and resources.
-See [M2 SDK and controls](docs/m2-playable.md) and [M1 contracts](docs/m1-headless.md).
+See [M4 creation tools](docs/m4-advanced.md), [M2 SDK and controls](docs/m2-playable.md)
+and [M1 contracts](docs/m1-headless.md).
 
 ## Run from the repository
 
 ```sh
 cargo test --workspace
 cargo run --release --example play --features desktop
+# Optional --difficulty easy|normal|hard; --health 10000 for validation.
 # Optional --script my_stage.graze or --script target/my_stage.gzb.
-cargo run --release --example script -- compile assets/demo/first_sortie.graze target/first_sortie.gzb
+cargo run --release --example script -- compile assets/demo/advanced_showcase.graze target/advanced_showcase.gzb
+cargo run --release --example advanced
 cargo run --release --example script
 # Optional: --project assets/demo/project.json; --autoplay --frames 600
 cargo run --release --example benchmark -- 100000 1200 m1 circle
@@ -53,9 +60,13 @@ target/c_game
 ```
 
 In the playable demo: arrow keys/WASD move, Z/Space shoots, X uses a Bomb, Shift
-halves speed, P pauses, R/Enter restarts. Twenty waves occupy two minutes; the
-Boss follows. Sustained centered shooting clears the stage at about 2:50 with
-the high-health validation fixture. Normal play starts with three health and
+halves speed, P pauses, R/Enter restarts. Seventy waves occupy seven minutes,
+followed by three one-minute Boss phases. Defeating a phase earns a bonus;
+surviving its timer also advances the stage. Thin warning/fading lasers are
+harmless; bright active beams persist when they hit. Point drops score, power
+drops strengthen shots (four levels), and Bomb drops replenish stock. Nearby
+drops attract to the ship; moving into the top quarter attracts all drops.
+Normal play starts with three health and
 three Bombs. Focus loss/minimization pause desktop ticks; browser visibility
 and focus loss pause ticks. Pause/resume discards paused wall time.
 
@@ -77,6 +88,9 @@ Open `http://localhost:8080/?backend=webgpu` or
 `http://localhost:8080/?backend=webgl`. Explicit backend selection
 fails visibly when unavailable; `backend=auto` selects WebGPU with WebGL2
 fallback. Click **Enable sound** to unlock event-driven browser audio.
+Choose Easy/Normal/Hard in the page or use `?difficulty=hard`. Load a focused
+example with `?script=./examples/curve_laser.graze`; the historical M3 stage
+remains at `?script=./first_sortie.graze`.
 The M0 performance demo is at `/motion.html?backend=webgl&count=30000`.
 Generated `web/pkg` and `web/assets` are excluded from Git. The checked-in
 `assets/demo` contains the JSON manifest and raw RGBA atlas; `make_assets`
@@ -90,6 +104,7 @@ cargo run --release --example trace -- 100000 > target/native-trace.txt
 cargo run --release --example trace -- 100000 m1 > target/native-simulation-trace.txt
 cargo run --release --example trace -- 100000 m2 > target/native-game-trace.txt
 cargo run --release --example trace -- 100000 m3 > target/native-script-trace.txt
+cargo run --release --example trace -- 100000 m4 > target/native-advanced-trace.txt
 cargo run --release --example script -- restore-check > target/native-vm-restore.txt
 node scripts/check-wasm.mjs
 node scripts/benchmark-wasm.mjs 30000 1200 circle
@@ -119,7 +134,8 @@ See [M0 platform validation](docs/m0-validation.md) and
 [M1 core validation](docs/m1-validation.md) for actual coverage and performance
 evidence, and [M2 playable validation](docs/m2-validation.md) for the shared SDK.
 See [M3 language and VM](docs/m3-language.md) and [M3 validation](docs/m3-validation.md)
-for script authoring and actual execution evidence. Next milestones add advanced
-STG features, replay/debug tools, stable SDK/ABI and editor integration, in that order.
+for script authoring, and [M4 validation](docs/m4-validation.md) for actual
+ten-minute stage, native/C/WASM/browser and allocation evidence. Next milestones
+add replay/debug tools, stable SDK/ABI and editor integration, in that order.
 
 Licensed under MIT OR Apache-2.0.

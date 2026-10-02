@@ -9,6 +9,7 @@ pub struct Program {
     pub(crate) entry: u16,
     pub(crate) functions: Vec<Function>,
     hash: u64,
+    advanced: bool,
 }
 impl Program {
     pub fn compile(file: &str, source: &str) -> Result<Self, Diagnostic> {
@@ -35,6 +36,16 @@ impl Program {
     pub fn instruction_count(&self) -> usize {
         self.functions.iter().map(|f| f.code.len()).sum()
     }
+    pub fn uses_advanced(&self) -> bool {
+        self.advanced
+    }
+    pub fn bytecode_version(&self) -> u32 {
+        if self.uses_advanced() {
+            BYTECODE_VERSION
+        } else {
+            1
+        }
+    }
     pub(crate) fn diagnostic(
         &self,
         kind: DiagnosticKind,
@@ -59,12 +70,17 @@ impl Program {
         entry: u16,
         functions: Vec<Function>,
     ) -> Result<Self, Diagnostic> {
+        let advanced = functions
+            .iter()
+            .flat_map(|f| &f.code)
+            .any(|i| matches!(i.op, Op::Builtin { builtin, .. } if builtin as u8 >= 27));
         let mut program = Self {
             file,
             source,
             entry,
             functions,
             hash: 0,
+            advanced,
         };
         program.verify()?;
         let mut hash = Fingerprint::new();

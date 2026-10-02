@@ -115,6 +115,19 @@ impl Collider {
     pub fn radius(&self) -> Fixed {
         self.radius
     }
+    /// Local endpoints of capsule/polyline segments, in collision order.
+    pub fn segments(&self) -> impl ExactSizeIterator<Item = (Vec2, Vec2)> + '_ {
+        let len = match self.shape {
+            Shape::Circle => 0,
+            Shape::Capsule { .. } => 1,
+            Shape::Curve { len, .. } => usize::from(len) - 1,
+        };
+        (0..len).map(|i| match self.shape {
+            Shape::Capsule { start, end } => (start, end),
+            Shape::Curve { points, .. } => (points[i], points[i + 1]),
+            Shape::Circle => unreachable!("circle has no segments"),
+        })
+    }
 
     /// Inclusive contact with a circle. All arithmetic uses integer raw bits.
     pub fn intersects_circle(&self, position: Vec2, center: Vec2, radius: Fixed) -> bool {

@@ -11,7 +11,9 @@
 //! # Ok::<(), grazer::GameError>(())
 //! ```
 mod clock;
+pub mod showcase;
 mod stage;
+use crate::advanced::{AdvancedConfig, DropKind, LaserSegment};
 use crate::{
     BoundsBehavior, Collider, EntityKind, Event, Faction, Fixed, Input, PlayerConfig, Projectile,
     Simulation, SimulationConfig, SimulationError, Vec2,
@@ -159,6 +161,20 @@ pub struct Hud {
     pub enemies: u32,
     pub bomb_flash: u32,
 }
+/// Additive M4 HUD; the existing HUD and C ABI keep their layouts.
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct AdvancedHud {
+    pub difficulty: u32,
+    pub power: u32,
+    pub drops: u32,
+    pub boss_phase: u32,
+    pub phase_ticks: u32,
+    pub phases_started: u32,
+    pub collected: u64,
+    pub cancelled: u64,
+    pub phase_bonus: u64,
+}
 pub struct Game<S: Stage = DemoStage> {
     config: GameConfig,
     seed: u64,
@@ -174,6 +190,8 @@ pub struct Game<S: Stage = DemoStage> {
     shot_cooldown: u32,
     flash: u32,
     audio: Vec<AudioEvent>,
+    power: u32,
+    phase_bonus: u64,
 }
 impl<S: Stage> Clone for Game<S> {
     fn clone(&self) -> Self {
@@ -194,6 +212,8 @@ impl<S: Stage> Clone for Game<S> {
             shot_cooldown: self.shot_cooldown,
             flash: self.flash,
             audio,
+            power: self.power,
+            phase_bonus: self.phase_bonus,
         }
     }
 }
@@ -214,6 +234,25 @@ impl<S: Stage> Game<S> {
         resources: ResourcePack,
         stage: S,
     ) -> Result<Self, GameError> {
+        let advanced = stage.advanced_config();
+        Self::with_stage_options(config, seed, resources, stage, advanced)
+    }
+    pub fn with_advanced_stage(
+        config: GameConfig,
+        seed: u64,
+        resources: ResourcePack,
+        stage: S,
+        advanced: AdvancedConfig,
+    ) -> Result<Self, GameError> {
+        Self::with_stage_options(config, seed, resources, stage, Some(advanced))
+    }
+    fn with_stage_options(
+        config: GameConfig,
+        seed: u64,
+        resources: ResourcePack,
+        stage: S,
+        advanced: Option<AdvancedConfig>,
+    ) -> Result<Self, GameError> {
         if config.shot_interval == 0 || config.bombs > 99 {
             return Err(SimulationError::InvalidConfig.into());
         }
@@ -227,7 +266,10 @@ impl<S: Stage> Game<S> {
                 return Err(ResourceError::Sound(id).into());
             }
         }
-        let world = Simulation::new(config.simulation, seed)?;
+        let mut world = Simulation::new(config.simulation, seed)?;
+        if let Some(options) = advanced {
+            world.enable_advanced(options)?;
+        }
         Ok(Self {
             config,
             seed,
@@ -243,10 +285,19 @@ impl<S: Stage> Game<S> {
             shot_cooldown: 0,
             flash: 0,
             audio: Vec::with_capacity(config.simulation.enemy_capacity as usize + 16),
+            power: 0,
+            phase_bonus: 0,
         })
     }
     pub fn simulation(&self) -> &Simulation {
         &self.world
+    }
+    pub fn protocol_version(&self) -> u32 {
+        if self.world.advanced_config().is_some() {
+            crate::advanced::ADVANCED_PROTOCOL_VERSION
+        } else {
+            GAME_PROTOCOL_VERSION
+        }
     }
     pub fn stage(&self) -> &S {
         &self.stage
@@ -283,9 +334,46 @@ impl<S: Stage> Game<S> {
             bomb_flash: self.flash,
         }
     }
+    pub fn advanced_hud(&self) -> Option<AdvancedHud> {
+        let m = self.world.advanced_metrics()?;
+        Some(AdvancedHud {
+            difficulty: self.world.difficulty()? as u32,
+            power: self.power,
+            drops: m.drops,
+            boss_phase: m.boss_phase,
+            phase_ticks: m.phase_ticks,
+            phases_started: m.phases_started,
+            collected: m.collected,
+            cancelled: m.cancelled,
+            phase_bonus: self.phase_bonus,
+        })
+    }
+    pub fn laser_segments(&self) -> impl Iterator<Item = LaserSegment> + '_ {
+        self.world.laser_segments()
+    }
+    /// Worst-case preallocation for beams, drop sprites and HUD composition.
+    pub fn presentation_capacity(&self) -> usize {
+        let cfg = self.world.config();
+        cfg.projectile_capacity as usize
+            + if self.world.advanced_config().is_some() {
+                crate::advanced::MAX_LASERS * 4 * (crate::simulation::MAX_CURVE_POINTS - 1)
+            } else {
+                0
+            }
+            + cfg.enemy_capacity as usize
+            + self
+                .world
+                .advanced_config()
+                .map_or(0, |c| c.drop_capacity as usize)
+            + 1024
+    }
     /// Restart allocates fresh pools; ordinary successful ticks do not allocate.
     pub fn restart(&mut self) -> Result<(), GameError> {
+        let advanced = self.world.advanced_config();
         self.world = Simulation::new(self.config.simulation, self.seed)?;
+        if let Some(options) = advanced {
+            self.world.enable_advanced(options)?;
+        }
         self.stage = self.initial_stage.clone();
         self.status = StageStatus::default();
         self.phase = GamePhase::Playing;
@@ -295,6 +383,8 @@ impl<S: Stage> Game<S> {
         self.shot_cooldown = 0;
         self.flash = 0;
         self.audio.clear();
+        self.power = 0;
+        self.phase_bonus = 0;
         Ok(())
     }
     /// Invalid input is rejected atomically. A native stage/command failure
@@ -342,14 +432,22 @@ impl<S: Stage> Game<S> {
                 ));
             }
         };
-        if old_status.boss.is_none() && self.status.boss.is_some() {
+        let advanced = self.world.advanced_config().is_some();
+        let multiplier = self.world.difficulty().map_or(1, |d| d.score_multiplier());
+        if self.status.boss.is_some()
+            && (old_status.boss.is_none() || advanced && old_status.boss != self.status.boss)
+        {
             self.emit(6);
         }
         self.shot_cooldown = self.shot_cooldown.saturating_sub(1);
         self.flash = self.flash.saturating_sub(1);
         if bomb_edge && self.bombs > 0 {
             self.bombs -= 1;
-            self.world.clear_hostile_projectiles();
+            if advanced {
+                self.world.cancel_shots(false)?;
+            } else {
+                self.world.clear_hostile_projectiles();
+            }
             self.world.protect_player(90);
             self.world.damage_enemies(self.config.bomb_damage);
             self.flash = 30;
@@ -371,7 +469,7 @@ impl<S: Stage> Game<S> {
                     velocity: point(0, -12),
                     collider: Collider::circle(units(2)).expect("positive radius"),
                     faction: Faction::Player,
-                    damage: 1,
+                    damage: 1 + self.power,
                     lifetime: 70,
                     bounds: BoundsBehavior::Despawn,
                     rgba: 0xffed9aff,
@@ -393,11 +491,27 @@ impl<S: Stage> Game<S> {
             speed,
         )?;
         self.stage.after_step(&self.world);
+        self.score = self
+            .score
+            .saturating_add(self.world.take_cancel_points().saturating_mul(multiplier));
         let mut hit = false;
         let mut graze = false;
         let mut died = false;
         for index in 0..self.world.events().len() {
             match self.world.events()[index] {
+                Event::Collected { kind, value, .. } => match kind {
+                    DropKind::Point => {
+                        self.score = self
+                            .score
+                            .saturating_add(u64::from(value).saturating_mul(multiplier))
+                    }
+                    DropKind::Power => self.power = self.power.saturating_add(value).min(4),
+                    DropKind::Bomb => {
+                        if self.bombs < 9 {
+                            self.bombs = self.bombs.saturating_add(value).min(9);
+                        }
+                    }
+                },
                 Event::Hit { target, damage, .. }
                     if target.kind() == EntityKind::Player && damage > 0 =>
                 {
@@ -405,13 +519,18 @@ impl<S: Stage> Game<S> {
                 }
                 Event::Grazed { .. } => {
                     graze = true;
-                    self.score = self.score.saturating_add(10);
+                    self.score = self.score.saturating_add(10 * multiplier);
                 }
                 Event::Destroyed {
                     entity,
                     reason: crate::simulation::DespawnReason::HealthDepleted,
                 } if entity.kind() == EntityKind::Enemy => {
-                    self.score = self.score.saturating_add(100);
+                    self.score = self.score.saturating_add(100 * multiplier);
+                    if advanced && Some(entity) == self.status.boss {
+                        let bonus = 5000 * multiplier;
+                        self.score = self.score.saturating_add(bonus);
+                        self.phase_bonus = self.phase_bonus.saturating_add(bonus);
+                    }
                     self.emit(4);
                 }
                 Event::PlayerDied => died = true,
@@ -428,10 +547,11 @@ impl<S: Stage> Game<S> {
             self.phase = GamePhase::GameOver;
             self.emit(8);
         } else if self.status.complete
-            || self
-                .status
-                .boss
-                .is_some_and(|handle| self.world.enemy(handle).is_none())
+            || !advanced
+                && self
+                    .status
+                    .boss
+                    .is_some_and(|handle| self.world.enemy(handle).is_none())
         {
             self.phase = GamePhase::Cleared;
             self.emit(7);
@@ -441,9 +561,9 @@ impl<S: Stage> Game<S> {
         }
         Ok(())
     }
-    /// Same owned sprite layout in all hosts. Player is drawn last; floats never
-    /// return to simulation. The demo uses circles for collision, textured quads
-    /// for display. Stage-defined non-circular projectiles keep their hit shape.
+    /// Same owned sprite layout in all hosts. M4 drops use layer 25 and the
+    /// player layer 30. Lasers use the separate `laser_segments` snapshot.
+    /// Presentation floats never return to authoritative simulation.
     pub fn sprites(&self) -> impl Iterator<Item = GameSprite> + '_ {
         self.world.snapshots().filter_map(|e| {
             let (resource_id, width, height, rgba, layer) = match e.handle.kind() {
@@ -465,6 +585,9 @@ impl<S: Stage> Game<S> {
                 }
                 EntityKind::Enemy => (resources::ENEMY, 28.0, 28.0, e.rgba, 10),
                 EntityKind::Projectile => {
+                    if self.world.laser_phase(e.handle).is_some() {
+                        return None;
+                    }
                     let friendly = self
                         .world
                         .projectile(e.handle)
@@ -476,6 +599,20 @@ impl<S: Stage> Game<S> {
                     } else {
                         (resources::ENEMY_SHOT, 12.0, 12.0, e.rgba, 20)
                     }
+                }
+                EntityKind::Drop => {
+                    let drop = self.world.drop_snapshot(e.handle).expect("live drop");
+                    (
+                        match drop.reward.kind {
+                            DropKind::Point => resources::STAR,
+                            DropKind::Power => resources::HEART,
+                            DropKind::Bomb => resources::BOMB,
+                        },
+                        16.0,
+                        16.0,
+                        e.rgba,
+                        25,
+                    )
                 }
             };
             Some(GameSprite {
@@ -494,7 +631,7 @@ impl<S: Stage> Game<S> {
     }
     pub fn state_hash(&self) -> u64 {
         let mut hash = Fingerprint::new();
-        hash.u32(GAME_PROTOCOL_VERSION);
+        hash.u32(self.protocol_version());
         hash.u64(self.resources.content_hash());
         hash.u64(S::CONTENT_ID);
         hash.u64(self.stage.state_hash());
@@ -532,6 +669,10 @@ impl<S: Stage> Game<S> {
             self.input.restart,
         ] {
             hash.u32(u32::from(v));
+        }
+        if self.world.advanced_config().is_some() {
+            hash.u32(self.power);
+            hash.u64(self.phase_bonus);
         }
         hash.finish()
     }

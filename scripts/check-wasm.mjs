@@ -6,6 +6,7 @@ for (const [mode, path, run] of [
     ['M1', 'target/native-simulation-trace.txt', instance.exports.run_simulation_trace],
     ['M2', 'target/native-game-trace.txt', instance.exports.run_game_trace],
     ['M3', 'target/native-script-trace.txt', instance.exports.run_script_trace],
+    ['M4', 'target/native-advanced-trace.txt', instance.exports.run_advanced_trace],
 ]) {
     const hashes = readFileSync(path, 'utf8').trim().split('\n');
     assert.equal(hashes.length, 100000, `${mode} requires the full conformance trace`);

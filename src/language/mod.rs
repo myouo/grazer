@@ -22,9 +22,9 @@ use crate::{EntityHandle, Fixed, Vec2};
 pub use program::Program;
 pub use stage::{ScriptStage, conformance_game, restore_fixture_hash, trace};
 pub use vm::{Vm, VmLimits};
-pub const BYTECODE_VERSION: u32 = 1;
+pub const BYTECODE_VERSION: u32 = 2;
 pub const VM_STATE_VERSION: u32 = 1;
-pub const VM_PROTOCOL_VERSION: u32 = 1;
+pub const VM_PROTOCOL_VERSION: u32 = 2;
 pub const MAX_REGISTERS: usize = 64;
 pub const MAX_ARGUMENTS: usize = 8;
 pub const MAX_FUNCTIONS: usize = 128;
@@ -280,12 +280,27 @@ pub(crate) enum Builtin {
     CancelChildren = 24,
     Attach = 25,
     CurrentTask = 26,
+    Polar = 27,
+    Ring = 28,
+    Fan = 29,
+    Aimed = 30,
+    Spiral = 31,
+    Compose = 32,
+    Laser = 33,
+    CurveLaser = 34,
+    Drop = 35,
+    EnemyDrop = 36,
+    Difficulty = 37,
+    Phase = 38,
+    Despawn = 39,
+    CancelShots = 40,
+    Colour = 41,
 }
 impl Builtin {
     pub fn decode(tag: u8) -> Option<Self> {
         Self::ALL.get(tag as usize).copied()
     }
-    pub const ALL: [Self; 27] = [
+    pub const ALL: [Self; 42] = [
         Self::Vector,
         Self::Fixed,
         Self::Int,
@@ -313,6 +328,21 @@ impl Builtin {
         Self::CancelChildren,
         Self::Attach,
         Self::CurrentTask,
+        Self::Polar,
+        Self::Ring,
+        Self::Fan,
+        Self::Aimed,
+        Self::Spiral,
+        Self::Compose,
+        Self::Laser,
+        Self::CurveLaser,
+        Self::Drop,
+        Self::EnemyDrop,
+        Self::Difficulty,
+        Self::Phase,
+        Self::Despawn,
+        Self::CancelShots,
+        Self::Colour,
     ];
     pub fn name(self) -> &'static str {
         match self {
@@ -343,6 +373,21 @@ impl Builtin {
             Self::CancelChildren => "cancel_children",
             Self::Attach => "attach",
             Self::CurrentTask => "current_task",
+            Self::Polar => "polar",
+            Self::Ring => "ring",
+            Self::Fan => "fan",
+            Self::Aimed => "aimed",
+            Self::Spiral => "spiral",
+            Self::Compose => "compose",
+            Self::Laser => "laser",
+            Self::CurveLaser => "curve_laser",
+            Self::Drop => "drop",
+            Self::EnemyDrop => "enemy_drop",
+            Self::Difficulty => "difficulty",
+            Self::Phase => "phase",
+            Self::Despawn => "despawn",
+            Self::CancelShots => "cancel_shots",
+            Self::Colour => "colour",
         }
     }
     pub fn signature(self) -> (&'static [Type], Type) {
@@ -369,6 +414,19 @@ impl Builtin {
             Self::Join | Self::Cancel => (&[Task], Unit),
             Self::Attach => (&[Entity], Unit),
             Self::CurrentTask => (&[], Task),
+            Self::Polar => (&[Fixed, Fixed], Vec),
+            Self::Ring => (&[Vec, Int, Fixed, Fixed, Fixed, Int], Unit),
+            Self::Fan | Self::Spiral => (&[Vec, Int, Fixed, Fixed, Fixed, Fixed, Int], Unit),
+            Self::Aimed => (&[Vec, Vec, Int, Fixed, Fixed, Fixed, Int], Unit),
+            Self::Compose => (&[Entity, Vec, Fixed], Unit),
+            Self::Laser => (&[Vec, Vec, Fixed, Int, Int, Int], Entity),
+            Self::CurveLaser => (&[Vec, Vec, Vec, Fixed, Int, Int, Int], Entity),
+            Self::Drop => (&[Vec, Int, Int], Entity),
+            Self::EnemyDrop | Self::Phase => (&[Entity, Int, Int], Unit),
+            Self::Difficulty => (&[], Int),
+            Self::Despawn => (&[Entity], Unit),
+            Self::CancelShots => (&[Bool], Int),
+            Self::Colour => (&[Entity, Int], Unit),
         }
     }
     pub fn task_only(self) -> bool {
@@ -393,7 +451,36 @@ impl Builtin {
                 | Self::Wave
                 | Self::Boss
                 | Self::Complete
+                | Self::Ring
+                | Self::Fan
+                | Self::Aimed
+                | Self::Spiral
+                | Self::Compose
+                | Self::Laser
+                | Self::CurveLaser
+                | Self::Drop
+                | Self::EnemyDrop
+                | Self::Phase
+                | Self::Despawn
+                | Self::CancelShots
+                | Self::Colour
         )
+    }
+    pub fn command_cost(self, args: &[Value; 8]) -> u32 {
+        if !self.command() {
+            return 0;
+        }
+        let count = match self {
+            Self::Ring | Self::Fan | Self::Spiral => Some(1),
+            Self::Aimed => Some(2),
+            _ => None,
+        };
+        if let Some(index) = count
+            && let Value::Int(n) = args[index]
+        {
+            return n.max(1) as u32;
+        }
+        1
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

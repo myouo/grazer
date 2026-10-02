@@ -1,0 +1,22 @@
+task main() {
+    let number = 1;
+    while number <= 3 {
+        fork encounter(number);
+        wait(240);
+        cancel_children();
+        clear_enemies();
+        cancel_shots(true);
+        number = number + 1;
+    }
+    complete();
+}
+task encounter(number: int) {
+    let ship = enemy(vec(width() / 2.0, 100.0), vec(0.0, 0.0), 24.0, 20, 0, 0xe99fffff);
+    boss(ship, 20);
+    phase(ship, number, 240);
+    attach(ship);
+    while alive(ship) {
+        ring(position(ship), 8 + number * 4, 1.5, 0.0, 3.0, 240);
+        wait(90);
+    }
+}

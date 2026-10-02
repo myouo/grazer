@@ -118,6 +118,31 @@ uint32_t grazer_script_api_version(void);
 int32_t grazer_game_create_script(const GrazerGameConfig *config, const uint8_t *source, uint32_t length, uint32_t format, GrazerGame **out, GrazerScriptDiagnostic *diagnostic);
 int32_t grazer_game_diagnostic(const GrazerGame *game, GrazerScriptDiagnostic *out);
 int32_t grazer_game_diagnostic_text(const GrazerGame *game, uint8_t *out, uint32_t capacity, uint32_t *required);
+
+/* Additive M4 API; existing ABI and HUD layouts are unchanged.
+ * Advanced games finish only on complete(); boss deaths permit another phase.
+ * Null+zero source with format 0 selects the ten-minute Prism Passage stage.
+ * Other source/bytecode uses the same checked script loading rules.
+ * All snapshot floats are presentation-only. Sprite kind 3 is a drop, layer 25.
+ * Lasers live in the projectile pool but use a separate bulk geometry snapshot.
+ * Laser phases: 0 warning (harmless), 1 active (persistent), 2 fading (harmless).
+ */
+#define GRAZER_ADVANCED_API_VERSION 1u
+enum { GRAZER_EASY=0u, GRAZER_NORMAL=1u, GRAZER_HARD=2u };
+typedef struct {
+    uint32_t difficulty, power, drops, boss_phase, phase_ticks, phases_started;
+    uint64_t collected, cancelled, phase_bonus;
+} GrazerAdvancedHud;
+typedef struct {
+    uint32_t slot, generation, segment, phase;
+    float x1, y1, x2, y2, width;
+    uint32_t rgba;
+} GrazerLaserSegment;
+uint32_t grazer_advanced_api_version(void);
+int32_t grazer_game_create_advanced(const GrazerGameConfig *config, const uint8_t *source, uint32_t length, uint32_t format, uint32_t difficulty, GrazerGame **out, GrazerScriptDiagnostic *diagnostic);
+/* Returns INVALID_ARGUMENT for legacy games. */
+int32_t grazer_game_advanced_hud(const GrazerGame *game, GrazerAdvancedHud *out);
+int32_t grazer_game_lasers(const GrazerGame *game, GrazerLaserSegment *out, uint32_t capacity, uint32_t *required);
 #ifdef __cplusplus
 }
 #endif

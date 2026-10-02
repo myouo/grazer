@@ -5,6 +5,8 @@
 //! headless collision core. [`Runtime`] retains the protocol-1 M0 fixture.
 //! [`language`] provides the M3 typed compiler, verified bytecode, cooperative
 //! tasks, resource budgets, source diagnostics and serialized VM continuation.
+//! [`advanced`] adds M4 patterns, composed motion, timed persistent lasers,
+//! drops and difficulty. [`game::showcase`] runs the ten-minute script stage.
 //! Rendering is optional; the default build has no dependencies.
 //!
 //! ```
@@ -20,14 +22,15 @@ mod fixed;
 pub mod game;
 pub mod language;
 pub use game::{
-    AudioEvent, Game, GameConfig, GameError, GameInput, GamePhase, GameSprite, Hud, Stage,
-    StageStatus,
+    AdvancedHud, AudioEvent, Game, GameConfig, GameError, GameInput, GamePhase, GameSprite, Hud,
+    Stage, StageStatus,
 };
 pub mod resources;
 mod runtime;
 pub mod simulation;
 pub use fixed::Fixed;
 pub use runtime::{Bullet, Config, DrawSprite, Error, Input, PROTOCOL_VERSION, Runtime, TICK_RATE};
+pub use simulation::advanced;
 pub use simulation::{
     BoundsBehavior, Collider, Enemy, EntityHandle, EntityKind, EntitySnapshot, Event, Faction,
     PlayerConfig, PlayerState, Projectile, SIMULATION_PROTOCOL_VERSION, Simulation,

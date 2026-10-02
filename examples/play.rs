@@ -65,13 +65,12 @@ mod native {
                 let surface = instance
                     .create_surface(window.clone())
                     .map_err(|e| e.to_string())?;
-                let cfg = self.game.simulation().config();
                 let renderer = pollster::block_on(GameRenderer::new(
                     &instance,
                     surface,
                     size.width,
                     size.height,
-                    cfg.projectile_capacity as usize + cfg.enemy_capacity as usize + 1024,
+                    self.game.presentation_capacity(),
                     self.game.resources(),
                 ))?;
                 println!(
@@ -237,10 +236,21 @@ mod native {
         let mut autoplay = false;
         let mut project = None;
         let mut script_path = None;
+        let mut difficulty = grazer::advanced::Difficulty::Normal;
+        let mut health = 0;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--frames" => limit = args.next().ok_or("--frames needs a count")?.parse()?,
                 "--autoplay" => autoplay = true,
+                "--health" => health = args.next().ok_or("--health needs a count")?.parse()?,
+                "--difficulty" => {
+                    difficulty = match args.next().as_deref() {
+                        Some("easy") => grazer::advanced::Difficulty::Easy,
+                        Some("normal") => grazer::advanced::Difficulty::Normal,
+                        Some("hard") => grazer::advanced::Difficulty::Hard,
+                        _ => return Err("--difficulty must be easy, normal or hard".into()),
+                    }
+                }
                 "--project" => project = Some(args.next().ok_or("--project needs a path")?),
                 "--script" => {
                     script_path = Some(args.next().ok_or("--script needs a source/bytecode path")?)
@@ -272,9 +282,26 @@ mod native {
                 )?
             }
         } else {
-            ScriptStage::builtin(42)?
+            ScriptStage::showcase(42)?
         };
-        let game = Game::with_stage(GameConfig::default(), 42, pack, stage)?;
+        let mut config = GameConfig::default();
+        if health > 0 {
+            config.simulation.player.health = health;
+        }
+        let game = if stage.vm().program().uses_advanced() {
+            Game::with_advanced_stage(
+                config,
+                42,
+                pack,
+                stage,
+                grazer::advanced::AdvancedConfig {
+                    difficulty,
+                    ..grazer::advanced::AdvancedConfig::default()
+                },
+            )?
+        } else {
+            Game::with_stage(config, 42, pack, stage)?
+        };
         let audio = match DesktopAudio::new() {
             Ok(audio) => {
                 println!("audio=running");

@@ -74,6 +74,76 @@ pub struct ResourcePack {
     hash: u64,
 }
 impl ResourcePack {
+    /// Portable resource archive, independent from gameplay and project versions.
+    pub fn to_bytes(&self) -> Result<Vec<u8>, crate::checkpoint::CheckpointError> {
+        let mut w = crate::checkpoint::Writer::new(b"GZASSET1");
+        w.u32(RESOURCE_VERSION);
+        w.u32(self.width);
+        w.u32(self.height);
+        w.blob(&self.atlas);
+        w.u32(self.sprites.len() as u32);
+        for s in &self.sprites {
+            for n in [s.id, s.x, s.y, s.width, s.height] {
+                w.u32(n);
+            }
+        }
+        w.u32(self.sounds.len() as u32);
+        for s in &self.sounds {
+            for n in [s.id, s.waveform, s.frequency, s.duration_ms, s.gain_q8] {
+                w.u32(n);
+            }
+        }
+        w.u64(self.hash);
+        w.finish(65 * 1024 * 1024)
+    }
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, crate::checkpoint::CheckpointError> {
+        use crate::checkpoint::{CheckpointError as E, Reader};
+        let mut r = Reader::new(bytes, b"GZASSET1", 65 * 1024 * 1024)?;
+        let version = r.u32()?;
+        if version != RESOURCE_VERSION {
+            return Err(E::Version);
+        }
+        let width = r.u32()?;
+        let height = r.u32()?;
+        if width == 0 || height == 0 || width > 4096 || height > 4096 {
+            return Err(E::Data("resource dimensions"));
+        }
+        let atlas = r.blob(64 * 1024 * 1024)?;
+        if atlas.len() != width as usize * height as usize * 4 {
+            return Err(E::Data("atlas byte count"));
+        }
+        let atlas = atlas.to_vec();
+        let n = r.count(4096, 20)?;
+        let mut sprites = Vec::with_capacity(n);
+        for _ in 0..n {
+            sprites.push(SpriteAsset {
+                id: r.u32()?,
+                x: r.u32()?,
+                y: r.u32()?,
+                width: r.u32()?,
+                height: r.u32()?,
+            });
+        }
+        let n = r.count(256, 20)?;
+        let mut sounds = Vec::with_capacity(n);
+        for _ in 0..n {
+            sounds.push(SoundAsset {
+                id: r.u32()?,
+                waveform: r.u32()?,
+                frequency: r.u32()?,
+                duration_ms: r.u32()?,
+                gain_q8: r.u32()?,
+            });
+        }
+        let expected = r.u64()?;
+        r.finish()?;
+        let pack = Self::new(version, width, height, atlas, sprites, sounds)
+            .map_err(|_| E::Data("resource entries"))?;
+        if pack.content_hash() != expected {
+            return Err(E::Fingerprint);
+        }
+        Ok(pack)
+    }
     pub fn new(
         version: u32,
         width: u32,

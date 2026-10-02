@@ -698,26 +698,20 @@ impl Simulation {
             }
             match p.spec.faction {
                 Faction::Enemy if self.player.health > 0 => {
-                    if p.spec.collider.swept_contact(
+                    let contact = p.spec.collider.player_contact(
                         p.previous,
                         p.spec.position,
                         self.player.previous_position,
                         self.player.position,
-                        self.config.player.radius,
-                    ) {
+                        (self.config.player.radius, self.config.player.graze_radius),
+                        p.grazed,
+                    );
+                    if contact == 1 {
                         self.contacts.push(Contact::Hit {
                             projectile: entry.handle,
                             target: EntityHandle::PLAYER,
                         });
-                    } else if !p.grazed
-                        && p.spec.collider.swept_contact(
-                            p.previous,
-                            p.spec.position,
-                            self.player.previous_position,
-                            self.player.position,
-                            self.config.player.graze_radius,
-                        )
-                    {
+                    } else if contact == 2 {
                         self.contacts.push(Contact::Graze(entry.handle));
                     }
                 }

@@ -50,6 +50,32 @@ mod native {
         samples: Vec<f64>,
     }
     impl App {
+        fn recover_renderer(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+            let window = self.window.as_ref().ok_or("window not ready")?.clone();
+            let size = window.inner_size();
+            self.renderer.take();
+            let instance = wgpu::Instance::default();
+            let surface = instance.create_surface(window)?;
+            let renderer = pollster::block_on(GameRenderer::new(
+                &instance,
+                surface,
+                size.width.max(1),
+                size.height.max(1),
+                self.session.game().presentation_capacity(),
+                self.session.game().resources(),
+            ))?;
+            self.renderer = Some(renderer);
+            self.paused = true;
+            self.session.set_paused(true);
+            self.clock.reset();
+            self.last = Instant::now();
+            println!(
+                "graphics recovered tick={} hash={:016x}",
+                self.session.game().hud().tick,
+                self.session.game().state_hash()
+            );
+            Ok(())
+        }
         fn archive(&mut self, replay: Option<GameReplay>) {
             if let Some(replay) = replay {
                 let path = self
@@ -309,6 +335,16 @@ mod native {
                     if !self.drawable {
                         return;
                     }
+                    if self.renderer.as_ref().is_some_and(|r| r.is_lost()) {
+                        match self.recover_renderer() {
+                            Ok(()) => self.error = None,
+                            Err(e) => {
+                                self.error = Some(e.to_string());
+                                event_loop.exit();
+                            }
+                        }
+                        return;
+                    }
                     let start = Instant::now();
                     if self.watch && self.last_watch.elapsed().as_secs_f64() >= 1.0 {
                         self.last_watch = Instant::now();
@@ -441,10 +477,14 @@ mod native {
         let mut hitboxes = false;
         let mut performance = false;
         let mut watch = false;
+        let mut bundle_path = None;
         while let Some(arg) = args.next() {
             match arg.as_str() {
                 "--frames" => limit = args.next().ok_or("--frames needs a count")?.parse()?,
                 "--autoplay" => autoplay = true,
+                "--bundle" => {
+                    bundle_path = Some(args.next().ok_or("--bundle needs a .grazer project")?)
+                }
                 "--practice" => {
                     practice = args
                         .next()
@@ -506,7 +546,9 @@ mod native {
         if health > 0 {
             config.simulation.player.health = health;
         }
-        let game = if stage.vm().program().uses_advanced() {
+        let game = if let Some(path) = bundle_path {
+            grazer::project::Project::from_bytes(&std::fs::read(path)?)?.create_game()?
+        } else if stage.vm().program().uses_advanced() {
             Game::with_advanced_stage(
                 config,
                 42,

@@ -172,6 +172,16 @@ int32_t grazer_replay_seek(GrazerReplayPlayer *player, uint64_t frame);
 int32_t grazer_replay_state_hash(const GrazerReplayPlayer *player, uint64_t *out);
 int32_t grazer_replay_status(const GrazerReplayPlayer *player, GrazerReplayStatus *out);
 int32_t grazer_replay_clone_game(const GrazerReplayPlayer *player, GrazerGame **out);
+
+/* Project API v1 loads a self-contained .grazer archive with checked bytecode,
+ * configuration/seed, atlas/sprites/tones and independent version/digests.
+ * Uses the existing owned Game handle, HUD/sprite/audio/resource APIs.
+ * Source buffers are borrowed, aligned/readable and nonoverlapping with output.
+ */
+#define GRAZER_PROJECT_API_VERSION 1u
+uint32_t grazer_project_api_version(void);
+int32_t grazer_game_create_project(const uint8_t *bytes, uint32_t length, GrazerGame **out);
+int32_t grazer_game_restore_project(const uint8_t *project, uint32_t project_length, const uint8_t *checkpoint, uint32_t checkpoint_length, GrazerGame **out);
 #ifdef __cplusplus
 }
 #endif

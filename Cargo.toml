@@ -52,6 +52,14 @@ required-features = ["desktop"]
 name = "play"
 required-features = ["desktop"]
 
+[[example]]
+name = "frame_benchmark"
+required-features = ["desktop"]
+
+[[example]]
+name = "project"
+required-features = ["resources"]
+
 [profile.release]
 lto = "thin"
 

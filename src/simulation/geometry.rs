@@ -174,6 +174,31 @@ impl Collider {
             || x + self.bounds[0] >= i64::from(width.bits())
             || y + self.bounds[1] >= i64::from(height.bits())
     }
+    /// One outer test rejects the common miss case before testing the smaller
+    /// hit radius. Hit/graze geometry and inclusive tangency are unchanged.
+    pub(crate) fn player_contact(
+        &self,
+        previous: Vec2,
+        current: Vec2,
+        target_previous: Vec2,
+        target_current: Vec2,
+        radii: (Fixed, Fixed),
+        already_grazed: bool,
+    ) -> u8 {
+        let (hit, graze) = radii;
+        let outer = if already_grazed { hit } else { graze };
+        if !self.swept_contact(previous, current, target_previous, target_current, outer) {
+            return 0;
+        }
+        if already_grazed
+            || hit == graze
+            || self.swept_contact(previous, current, target_previous, target_current, hit)
+        {
+            1
+        } else {
+            2
+        }
+    }
 }
 
 #[derive(Clone, Copy)]

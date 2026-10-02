@@ -1,6 +1,6 @@
 //! Optional instanced-circle presentation shared by desktop and browser demos.
 //! This module never changes authoritative simulation state.
-use crate::Runtime;
+use crate::{Runtime, Simulation};
 mod game;
 pub use game::{DebugDraw, GameRenderer, PreparedResources};
 use std::sync::{
@@ -132,6 +132,106 @@ impl Renderer {
         self.config.width = width;
         self.config.height = height;
         self.surface.configure(&self.device, &self.config);
+    }
+    pub fn is_lost(&self) -> bool {
+        self.lost.load(Ordering::Relaxed)
+    }
+    /// Disable vsync for controlled throughput measurements, never simulation time.
+    pub fn set_unlimited_present(&mut self) {
+        self.config.present_mode = wgpu::PresentMode::AutoNoVsync;
+        self.surface.configure(&self.device, &self.config);
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn wait_for_gpu(&self) -> Result<(), String> {
+        self.device
+            .poll(wgpu::PollType::Wait {
+                submission_index: None,
+                timeout: Some(std::time::Duration::from_secs(10)),
+            })
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+    /// M6 simple-circle fixture: includes owned snapshot extraction, upload and
+    /// normal instanced drawing. The simulation still owns hit/graze/lifecycle.
+    pub fn draw_simulation(&mut self, world: &Simulation) -> Result<bool, String> {
+        if self.is_lost() {
+            return Err("GPU device lost; recreate renderer".into());
+        }
+        if world.projectile_count() + world.enemy_count() + 1 > self.capacity {
+            return Err("renderer capacity exceeded".into());
+        }
+        self.instances.clear();
+        let cfg = world.config();
+        let w = cfg.width.to_f32();
+        let h = cfg.height.to_f32();
+        for s in world.snapshots() {
+            let radius = s.collider.radius().to_f32();
+            self.instances.push(Instance {
+                center: [
+                    s.position.x.to_f32() / w * 2.0 - 1.0,
+                    1.0 - s.position.y.to_f32() / h * 2.0,
+                ],
+                radius: [radius / w * 2.0, radius / h * 2.0],
+                color: [
+                    ((s.rgba >> 24) & 255) as f32 / 255.0,
+                    ((s.rgba >> 16) & 255) as f32 / 255.0,
+                    ((s.rgba >> 8) & 255) as f32 / 255.0,
+                    (s.rgba & 255) as f32 / 255.0,
+                ],
+            });
+        }
+        self.instances.rotate_left(1);
+        self.draw_instances(w, h)
+    }
+    fn draw_instances(&mut self, w: f32, h: f32) -> Result<bool, String> {
+        let output = match self.surface.get_current_texture() {
+            Ok(frame) => frame,
+            Err(wgpu::SurfaceError::Lost | wgpu::SurfaceError::Outdated) => {
+                self.surface.configure(&self.device, &self.config);
+                return Ok(false);
+            }
+            Err(wgpu::SurfaceError::Timeout | wgpu::SurfaceError::Other) => return Ok(false),
+            Err(e) => return Err(e.to_string()),
+        };
+        self.queue
+            .write_buffer(&self.buffer, 0, bytemuck::cast_slice(&self.instances));
+        let view = output.texture.create_view(&Default::default());
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("simulation circles"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.015,
+                            g: 0.02,
+                            b: 0.045,
+                            a: 1.0,
+                        }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                ..Default::default()
+            });
+            let scale = (self.config.width as f32 / w).min(self.config.height as f32 / h);
+            pass.set_viewport(
+                (self.config.width as f32 - w * scale) / 2.0,
+                (self.config.height as f32 - h * scale) / 2.0,
+                w * scale,
+                h * scale,
+                0.0,
+                1.0,
+            );
+            pass.set_pipeline(&self.pipeline);
+            pass.set_vertex_buffer(0, self.buffer.slice(..));
+            pass.draw(0..6, 0..self.instances.len() as u32);
+        }
+        self.queue.submit([encoder.finish()]);
+        output.present();
+        Ok(true)
     }
     /// Returns false for a recoverable surface failure; caller retries next frame.
     /// Device loss is reported as an error; hosts can rebuild the renderer while

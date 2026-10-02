@@ -2,7 +2,11 @@
 
 Deterministic Rust 2D bullet-hell (STG) runtime.
 
-**M5 / experimental, repository sources:** complete Game/world/VM checkpoints,
+**M6 release preparation, repository sources:** portable `.grazer` project
+archives, an SDK/ABI compatibility baseline, external Rust/C examples,
+graphics-device recovery and complete CPU/GPU frame benchmarks. Formal 0.1.0
+performance acceptance is still pending; no new release has been published.
+The M5 tools provide complete Game/world/VM checkpoints,
 resource-bound replay, verified seek/fast-forward, Boss practice, pause/step,
 collision outlines, CPU timings, state inspection and atomic source/resource
 reload. The M4 creation tools provide deterministic ring/fan/aimed/spiral
@@ -16,7 +20,7 @@ The shared headless core uses fixed 60Hz, checked Q16.16, generational pools,
 swept collision, grazing and input/command replay. Stable SDK/ABI, final platform/
 performance acceptance and editor remain later milestones.
 Public APIs may change before 0.1.0. The published `0.1.0-alpha.1` crate contains
-M0; these M1–M5 additions have not been published.
+M0; these M1–M6 repository additions have not been published.
 
 ```rust
 use grazer::{GameInput, advanced::Difficulty, game::showcase};
@@ -44,6 +48,8 @@ and [M1 contracts](docs/m1-headless.md).
 ```sh
 cargo test --workspace
 cargo run --release --example play --features desktop
+# Distributable game: --bundle target/my-game.grazer
+# Package source/resources: cargo run --release --features resources --example project -- pack stage.graze assets/demo/project.json target/my-game.grazer "My game"
 # Iteration: --practice 2 --hitboxes --performance; --record target/run.grz;
 # --replay target/run.grz; --script my_stage.graze --watch; --paused.
 # Optional --difficulty easy|normal|hard; --health 10000 for validation.
@@ -144,6 +150,8 @@ for script authoring, and [M4 validation](docs/m4-validation.md) for actual
 ten-minute stage evidence. See [M5 iteration tools](docs/m5-iteration.md) and
 [M5 validation](docs/m5-validation.md) for recording/checkpoints, practice, debug
 controls and actual host evidence. Next milestones are M6 stable SDK/ABI and
-formal platform/performance acceptance, then M7 editor integration.
+formal platform/performance acceptance, then M7 editor integration. See
+[authoring/distribution](docs/authoring.md), [SDK/ABI baseline](docs/sdk-abi.md)
+and [M6 release readiness](docs/m6-readiness.md).
 
 Licensed under MIT OR Apache-2.0.

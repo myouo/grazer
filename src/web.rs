@@ -1,6 +1,90 @@
 use crate::{Input, Runtime, graphics::Renderer};
 use wasm_bindgen::prelude::*;
 #[wasm_bindgen]
+pub struct WebFrameBenchmark {
+    world: crate::Simulation,
+    renderer: Renderer,
+    count: u32,
+    hits: u64,
+    minimum: u32,
+}
+#[wasm_bindgen]
+impl WebFrameBenchmark {
+    pub async fn create(
+        canvas: web_sys::HtmlCanvasElement,
+        backend: String,
+        count: u32,
+    ) -> Result<Self, JsValue> {
+        if count == 0 || count > 1_000_000 {
+            return Err(JsValue::from_str("benchmark count must be 1..1,000,000"));
+        }
+        let backends = match backend.as_str() {
+            "webgpu" => wgpu::Backends::BROWSER_WEBGPU,
+            "webgl" => wgpu::Backends::GL,
+            _ => {
+                return Err(JsValue::from_str(
+                    "benchmark backend must be webgpu or webgl",
+                ));
+            }
+        };
+        let instance = wgpu::Instance::new(&wgpu::InstanceDescriptor {
+            backends,
+            ..Default::default()
+        });
+        let width = canvas.width();
+        let height = canvas.height();
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let renderer = Renderer::new(&instance, surface, width, height, count as usize + 1)
+            .await
+            .map_err(|e| JsValue::from_str(&e))?;
+        let world =
+            crate::performance::scene(count, 42).map_err(|e| JsValue::from_str(&e.to_string()))?;
+        Ok(Self {
+            world,
+            renderer,
+            count,
+            hits: 0,
+            minimum: count,
+        })
+    }
+    pub fn adapter(&self) -> String {
+        self.renderer.adapter().into()
+    }
+    pub fn step(&mut self) -> Result<(), JsValue> {
+        if self.world.projectile_count() != self.count as usize {
+            return Err(JsValue::from_str("incomplete workload before step"));
+        }
+        self.world
+            .step_with_input(crate::performance::input(self.world.tick()))
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.minimum = self.minimum.min(self.world.projectile_count() as u32);
+        self.hits += self
+            .world
+            .events()
+            .iter()
+            .filter(|e| matches!(e, crate::Event::Hit { .. }))
+            .count() as u64;
+        Ok(())
+    }
+    pub fn replenish(&mut self) -> Result<(), JsValue> {
+        crate::performance::replenish(&mut self.world, self.count)
+            .map_err(|e| JsValue::from_str(&e.to_string()))
+    }
+    pub fn draw(&mut self) -> Result<bool, JsValue> {
+        self.renderer
+            .draw_simulation(&self.world)
+            .map_err(|e| JsValue::from_str(&e))
+    }
+    pub fn count(&self) -> u32 {
+        self.world.projectile_count() as u32
+    }
+    pub fn metrics(&self) -> String {
+        serde_json::json!({"hash":format!("{:016x}",self.world.state_hash()),"grazes":self.world.player().grazes,"hits":self.hits,"minimumAfterStep":self.minimum,"tick":self.world.tick(),"playerX":self.world.player().position.x.to_f32(),"playerY":self.world.player().position.y.to_f32()}).to_string()
+    }
+}
+#[wasm_bindgen]
 pub struct WebDemo {
     runtime: Runtime,
     renderer: Renderer,
@@ -81,7 +165,9 @@ pub fn conformance_trace(ticks: u32) -> Result<Vec<u64>, JsValue> {
 #[wasm_bindgen]
 pub struct WebGame {
     session: crate::game::debug::DebugSession<crate::language::ScriptStage>,
-    renderer: crate::graphics::GameRenderer,
+    renderer: Option<crate::graphics::GameRenderer>,
+    canvas: web_sys::HtmlCanvasElement,
+    backend: String,
     clock: crate::game::FrameClock,
 }
 #[wasm_bindgen]
@@ -171,7 +257,7 @@ impl WebGame {
         let width = canvas.width();
         let height = canvas.height();
         let surface = instance
-            .create_surface(wgpu::SurfaceTarget::Canvas(canvas))
+            .create_surface(wgpu::SurfaceTarget::Canvas(canvas.clone()))
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         let renderer = crate::graphics::GameRenderer::new(
             &instance,
@@ -186,12 +272,80 @@ impl WebGame {
         Ok(Self {
             session: crate::game::debug::DebugSession::new(game)
                 .map_err(|e| JsValue::from_str(&e.to_string()))?,
-            renderer,
+            renderer: Some(renderer),
+            canvas,
+            backend,
             clock: crate::game::FrameClock::default(),
         })
     }
     pub fn adapter(&self) -> String {
-        self.renderer.adapter().to_string()
+        self.renderer.as_ref().map_or_else(
+            || "Renderer unavailable".into(),
+            |r| r.adapter().to_string(),
+        )
+    }
+    pub fn device_lost(&self) -> bool {
+        self.renderer.as_ref().is_none_or(|r| r.is_lost())
+    }
+    /// Recreate presentation while retaining the exact Game/replay state.
+    pub async fn recover_renderer(&mut self) -> Result<(), JsValue> {
+        self.session.set_paused(true);
+        self.clock.reset();
+        self.renderer.take();
+        let backends = match self.backend.as_str() {
+            "webgpu" => wgpu::Backends::BROWSER_WEBGPU,
+            "webgl" => wgpu::Backends::GL,
+            _ => wgpu::Backends::BROWSER_WEBGPU | wgpu::Backends::GL,
+        };
+        let descriptor = wgpu::InstanceDescriptor {
+            backends,
+            ..Default::default()
+        };
+        let instance = if self.backend == "auto" {
+            wgpu::util::new_instance_with_webgpu_detection(&descriptor).await
+        } else {
+            wgpu::Instance::new(&descriptor)
+        };
+        let surface = instance
+            .create_surface(wgpu::SurfaceTarget::Canvas(self.canvas.clone()))
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let renderer = crate::graphics::GameRenderer::new(
+            &instance,
+            surface,
+            self.canvas.width(),
+            self.canvas.height(),
+            self.session.game().presentation_capacity(),
+            self.session.game().resources(),
+        )
+        .await
+        .map_err(|e| JsValue::from_str(&e))?;
+        self.renderer = Some(renderer);
+        Ok(())
+    }
+    pub fn load_project(&mut self, bytes: Vec<u8>) -> Result<Vec<u8>, JsValue> {
+        let project = crate::project::Project::from_bytes(&bytes)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let prepared = self
+            .renderer
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("renderer unavailable"))?
+            .prepare_resources(project.resources())
+            .map_err(|e| JsValue::from_str(&e))?;
+        let game = project
+            .create_game()
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        let old = self
+            .session
+            .replace_game(game)
+            .map_err(|e| JsValue::from_str(&e.to_string()))?;
+        self.renderer
+            .as_mut()
+            .expect("prepared renderer")
+            .commit_resources(prepared);
+        self.clock.reset();
+        old.map_or(Ok(Vec::new()), |r| {
+            r.to_bytes().map_err(|e| JsValue::from_str(&e.to_string()))
+        })
     }
     pub fn tick(&self) -> u64 {
         self.session.game().hud().tick
@@ -404,13 +558,18 @@ impl WebGame {
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
         let prepared = self
             .renderer
+            .as_ref()
+            .ok_or_else(|| JsValue::from_str("renderer unavailable; recover first"))?
             .prepare_resources(&pack)
             .map_err(|e| JsValue::from_str(&e))?;
         let old = self
             .session
             .reload("stage.graze", &source, pack)
             .map_err(|e| JsValue::from_str(&e.to_string()))?;
-        self.renderer.commit_resources(prepared);
+        self.renderer
+            .as_mut()
+            .expect("prepared renderer")
+            .commit_resources(prepared);
         self.clock.reset();
         old.map_or(Ok(Vec::new()), |r| {
             r.to_bytes().map_err(|e| JsValue::from_str(&e.to_string()))
@@ -430,11 +589,15 @@ impl WebGame {
             .map_err(|e| JsValue::from_str(&e.to_string()))
     }
     pub fn resize(&mut self, width: u32, height: u32) {
-        self.renderer.resize(width, height);
+        if let Some(renderer) = &mut self.renderer {
+            renderer.resize(width, height);
+        }
         self.clock.reset();
     }
     pub fn draw(&mut self) -> Result<bool, JsValue> {
         self.renderer
+            .as_mut()
+            .ok_or_else(|| JsValue::from_str("renderer unavailable; recover first"))?
             .draw_debug(
                 self.session.game(),
                 crate::graphics::DebugDraw {

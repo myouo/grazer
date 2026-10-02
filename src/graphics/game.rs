@@ -196,6 +196,9 @@ impl GameRenderer {
     pub fn adapter(&self) -> &str {
         self.base.adapter()
     }
+    pub fn is_lost(&self) -> bool {
+        self.base.is_lost()
+    }
     pub fn resize(&mut self, width: u32, height: u32) {
         self.base.resize(width, height);
     }

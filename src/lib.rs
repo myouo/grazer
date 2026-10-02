@@ -24,6 +24,8 @@ pub mod demo;
 mod fixed;
 pub mod game;
 pub mod language;
+pub mod performance;
+pub mod project;
 pub use game::{
     AdvancedHud, AudioEvent, Game, GameConfig, GameError, GameInput, GamePhase, GameSprite, Hud,
     Stage, StageStatus,

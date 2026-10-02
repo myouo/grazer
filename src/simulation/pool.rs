@@ -195,25 +195,26 @@ impl<T> Pool<T> {
         Ok(())
     }
     pub fn retain(&mut self, mut keep: impl FnMut(&Entry<T>) -> bool) {
+        let slots = &mut self.slots;
+        let free = &mut self.free;
         let mut write = 0;
-        for read in 0..self.dense.len() {
-            let entry = &self.dense[read];
-            let slot = &mut self.slots[entry.handle.slot as usize];
+        // Vec's stable retain moves a survivor once instead of swapping two
+        // large collider-bearing entries for every shift after a removal.
+        self.dense.retain(|entry| {
+            let slot = &mut slots[entry.handle.slot as usize];
             if keep(entry) {
                 slot.dense = Some(write);
-                if write != read {
-                    self.dense.swap(write, read);
-                }
                 write += 1;
+                true
             } else {
                 slot.dense = None;
                 if let Some(next) = slot.generation.checked_add(1) {
                     slot.generation = next;
-                    self.free.push(entry.handle.slot);
+                    free.push(entry.handle.slot);
                 }
+                false
             }
-        }
-        self.dense.truncate(write);
+        });
     }
     pub fn hash_layout(&self, hash: &mut super::StateHasher) {
         hash.u8(self.kind as u8);

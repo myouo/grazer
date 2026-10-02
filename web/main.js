@@ -4,7 +4,7 @@ const query = new URLSearchParams(location.search), keys = new Set();
 let runtime, audio, sounds, last = null, paused = false, focused = true, bombPending = false;
 let projectURL,stageURL,manifestCache,atlasCache;
 const voices = new Set();
-const state = window.grazerGameValidation = {ready:false,frames:0,audio:'locked',scheduledAudio:0,error:null};
+const state = window.grazerGameValidation = {recovering:false,ready:false,frames:0,audio:'locked',scheduledAudio:0,error:null};
 const backend = query.get('backend') ?? 'auto';
 document.querySelector('#backend').value = backend;
 document.querySelector('#backend').onchange = event => { query.set('backend',event.target.value); location.search = query.toString(); };
@@ -33,7 +33,7 @@ async function setPaused(value) {
     if (audio) { if (value) await audio.suspend(); else await audio.resume(); state.audio = audio.state; }
 }
 document.querySelector('#pause').onclick = () => setPaused(!paused).catch(fail);
-document.querySelector('#restart').onclick = () => { runtime.restart(); resetClock(); keys.clear(); bombPending=false; canvas.focus(); };
+document.querySelector('#restart').onclick = () => { runtime.restart();state.error=null;resetClock();keys.clear();bombPending=false;canvas.focus(); };
 document.querySelector('#audio').onclick = async () => {
     try { audio ??= new AudioContext(); await audio.resume(); state.audio = audio.state; playSound(1); document.querySelector('#audio').textContent = 'Sound enabled'; }
     catch (error) { status.textContent = `Sound unavailable: ${error}`; state.audio = String(error); }
@@ -57,8 +57,9 @@ for (const button of document.querySelectorAll('[data-key]')) {
     button.onlostpointercapture = () => keys.delete(button.dataset.key);
 }
 document.querySelector('#touch-bomb').onclick = () => bombPending=true;
-function fail(error) {state.error=String(error);status.textContent=`Stage paused: ${error}`;try{runtime?.draw();}catch{}}
+function fail(error) {state.error=String(error);paused=true;runtime?.set_paused(true);resetClock();status.textContent=`Stage paused: ${error}`;document.querySelector("#recover").hidden=!String(error).includes("GPU device lost");try{runtime?.draw();}catch{}}
 function updateStatus() {
+    if(state.error){status.textContent=state.error;return;}
     const m=metrics(); status.textContent = m.phase===1 ? 'Ship lost. Press R or Restart for a new run.' : m.phase===2 ? 'Stage clear. Press R to fly again.' : `${m.bossPhase?`Boss phase ${m.bossPhase} · ${Math.ceil(m.phaseTicks/60)}s`:`Wave ${m.wave || 1}`} · ${m.health} lives · ${m.bombs} bombs${m.power!==null?` · Power ${m.power}`:''}`;
 }
 function debugStatus(){return runtime?JSON.parse(runtime.debug_status()):{};}
@@ -69,7 +70,7 @@ function archive(bytes){if(bytes.length)download(bytes,'archived-run.grz');}
 function silence(){for(const voice of voices)voice.stop();keys.clear();bombPending=false;}
 function toolFailure(error){document.querySelector('#studio-error').textContent=String(error);setPaused(true).catch(fail);}
 function studioStep(){try{if(!paused)throw new Error('Pause before stepping');for(const id of runtime.step(0,0,1))playSound(id);runtime.draw();updateStatus();updateStudio();}catch(error){toolFailure(error);}}
-async function sourceReload(source,manifest=manifestCache,atlas=atlasCache){archive(runtime.reload(source,manifest,atlas));manifestCache=manifest;atlasCache=atlas;sounds=new Map(JSON.parse(manifest).sounds.map(s=>[s.id,s]));document.querySelector('#source-editor').value=source;document.querySelector('#studio-error').textContent='';silence();await setPaused(true);runtime.draw();updateStatus();}
+async function sourceReload(source,manifest=manifestCache,atlas=atlasCache){archive(runtime.reload(source,manifest,atlas));state.error=null;manifestCache=manifest;atlasCache=atlas;sounds=new Map(JSON.parse(manifest).sounds.map(s=>[s.id,s]));document.querySelector('#source-editor').value=source;document.querySelector('#studio-error').textContent='';silence();await setPaused(true);runtime.draw();updateStatus();}
 async function reloadFiles(){const response=await fetch(projectURL,{cache:'no-store'});if(!response.ok)throw new Error(`Reload project failed (${response.status})`);const manifest=await response.text(),url=new URL(JSON.parse(manifest).atlas.file,projectURL);if(url.origin!==location.origin)throw new Error('Atlas must use this origin');const [atlas,source]=await Promise.all([fetch(url,{cache:'no-store'}),fetch(stageURL,{cache:'no-store'})]);if(!atlas.ok||!source.ok)throw new Error('Reload asset/source fetch failed');await sourceReload(await source.text(),manifest,new Uint8Array(await atlas.arrayBuffer()));}
 document.querySelector('#step').onclick=studioStep;
 document.querySelector('#forward').onclick=()=>{try{runtime.fast_forward(600,1);runtime.draw();updateStatus();updateStudio();}catch(e){toolFailure(e);}};
@@ -82,7 +83,7 @@ document.querySelector('#practice').onclick=async()=>{try{silence();archive(runt
 document.querySelector('#seek').onclick=()=>{try{runtime.seek(Number(document.querySelector('#seek-frame').value));silence();runtime.draw();updateStatus();updateStudio();}catch(e){toolFailure(e);}};
 document.querySelector('#apply-source').onclick=()=>sourceReload(document.querySelector('#source-editor').value).catch(toolFailure);
 document.querySelector('#reload-files').onclick=()=>reloadFiles().catch(toolFailure);
-document.querySelector('#replay-file').onchange=async event=>{try{const file=event.target.files[0];if(!file)return;if(file.size>256*1024*1024)throw new Error('Replay file exceeds 256 MiB');const bytes=new Uint8Array(await file.arrayBuffer());archive(file.name.endsWith('.gcp')?runtime.restore_checkpoint(bytes):runtime.load_replay(bytes));silence();await setPaused(true);runtime.draw();updateStatus();}catch(e){toolFailure(e);}};
+document.querySelector('#replay-file').onchange=async event=>{try{const file=event.target.files[0];if(!file)return;if(file.size>256*1024*1024)throw new Error('Replay file exceeds 256 MiB');const bytes=new Uint8Array(await file.arrayBuffer());archive(file.name.endsWith('.grazer')?runtime.load_project(bytes):file.name.endsWith('.gcp')?runtime.restore_checkpoint(bytes):runtime.load_replay(bytes));silence();await setPaused(true);runtime.draw();updateStatus();}catch(e){toolFailure(e);}};
 try {
     await init();
     const project = new URL(query.get('project') ?? './assets/demo/project.json',location.href);
@@ -110,9 +111,11 @@ try {
     window.grazerGameTrace=(frames=100000)=>Array.from(script_conformance_trace(frames),n=>n.toString(16).padStart(16,'0'));
     window.grazerNativeGameTrace=(frames=100000)=>Array.from(game_conformance_trace(frames),n=>n.toString(16).padStart(16,'0'));
     window.grazerAdvancedGameTrace=(frames=100000)=>Array.from(advanced_conformance_trace(frames),n=>n.toString(16).padStart(16,'0'));
+    window.grazerRecoverGraphics=async()=>{state.recovering=true;paused=true;silence();resetClock();try{await runtime.recover_renderer();state.error=null;document.querySelector("#recover").hidden=true;await setPaused(true);runtime.draw();state.recovering=false;return metrics();}finally{state.recovering=false;}};
+    document.querySelector("#recover").onclick=()=>window.grazerRecoverGraphics().catch(fail);
     window.grazerGameLasers=()=>Array.from(runtime.laser_segments());
     window.grazerDebug={status:debugStatus,checkpoint:()=>runtime.checkpoint(),restore:bytes=>runtime.restore_checkpoint(bytes),record:interval=>runtime.start_recording(interval??600),stop:()=>runtime.stop_recording(),load:bytes=>runtime.load_replay(bytes),seek:frame=>{runtime.seek(frame);runtime.draw();return metrics();},practice:phase=>{runtime.practice(phase);paused=true;runtime.draw();updateStatus();return metrics();},boxes:value=>{runtime.set_hitboxes(value);runtime.draw();},panel:value=>{runtime.set_performance_panel(value);runtime.draw();},inspect:()=>JSON.parse(runtime.inspect()),reload:source=>{runtime.reload(source,manifestCache,atlasCache);paused=true;runtime.draw();return metrics();},reloadAssets:(source,manifest,atlas)=>runtime.reload(source,manifest,atlas),forward:steps=>{runtime.fast_forward(steps,1);runtime.draw();return metrics();}};
-    window.grazerSetPaused=setPaused; window.grazerDrawForProbe=()=>runtime.draw();
+    window.grazerResizeGame=(width,height)=>runtime.resize(width,height); window.grazerSetPaused=setPaused; window.grazerDrawForProbe=()=>runtime.draw();
     window.grazerGameAdvance=(steps,x=0,y=0,flags=1)=>{
         if(!Number.isInteger(steps)||steps<0||steps>20000) throw new Error('steps must be 0..20,000');
         for(let i=0;i<steps;i++) for(const id of runtime.step(x,y,flags)) playSound(id);
@@ -120,6 +123,7 @@ try {
     };
     window.grazerGameRestart=()=>{runtime.restart();resetClock();updateStatus();runtime.draw();return metrics();};
     const frame = now => {
+        if(state.recovering||state.error){requestAnimationFrame(frame);return;}
         try {
             const cpuStart=performance.now();
             const active=!document.hidden&&focused&&!paused, elapsed=last===null ? 0 : now-last; last=active ? now : null;

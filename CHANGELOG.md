@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased — M6 preparation
+
+- Add versioned self-contained project/resource archives with verified program,
+  config/seed/limits, sprites/atlas/tones and digest checks; desktop/browser/C load.
+- Define the proposed SDK/ABI baseline and layout/version tests; add external
+  authoring/distribution guidance and C project/checkpoint example.
+- Preserve authoritative state during graphics-device recreation and report
+  shader/pipeline failures at initialization; continue UI recovery after faults.
+- Add full-frame 1080p moving-bullet fixtures with collision/graze, normal drawing
+  and GPU completion. Retain measured failures; formal performance is pending.
+- Use stable one-move pool compaction and a shared outer collision rejection,
+  retaining historical hashes. Add three-platform/web distribution workflows.
+
 ## Unreleased — M5
 
 - Add complete versioned Simulation/Game/stage/VM checkpoints, resource/program

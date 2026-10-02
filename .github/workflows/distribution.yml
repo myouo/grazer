@@ -1,0 +1,59 @@
+name: Distribution artifacts
+on:
+  workflow_dispatch:
+  push:
+    branches: ['feat/m6-release-readiness']
+permissions:
+  contents: read
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Linux audio dependencies
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libasound2-dev pkg-config
+      - run: cargo build --release --features ffi,desktop --examples --locked
+      - run: cargo run --release --features resources --example project -- demo target/prism-passage.grazer
+      - name: Assemble artifact
+        shell: bash
+        run: |
+          mkdir -p target/distribution/include target/distribution/docs
+          cp include/grazer.h target/distribution/include/
+          cp LICENSE-MIT LICENSE-APACHE README.md target/distribution/
+          cp docs/authoring.md docs/sdk-abi.md target/distribution/docs/
+          cp target/prism-passage.grazer target/distribution/
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            cp target/release/examples/play.exe target/distribution/grazer.exe
+            cp target/release/grazer.dll target/release/grazer.dll.lib target/distribution/
+          elif [ "$RUNNER_OS" = "macOS" ]; then
+            cp target/release/examples/play target/distribution/grazer
+            cp target/release/libgrazer.dylib target/release/libgrazer.a target/distribution/
+          else
+            cp target/release/examples/play target/distribution/grazer
+            cp target/release/libgrazer.so target/release/libgrazer.a target/distribution/
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grazer-${{ runner.os }}-${{ runner.arch }}
+          path: target/distribution/
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo install wasm-bindgen-cli --version 0.2.128 --locked
+      - run: sh scripts/build-web.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: grazer-web
+          path: web/
